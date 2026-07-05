@@ -81,10 +81,3 @@ plus one Bash script. "Testing" is running the wedge experiment by hand (see REA
   (`HEAD~3..HEAD`, `main..HEAD`, `<sha>..<sha>`), and `since=YYYY-MM-DD`.
 - Branching/PR flow: Phase work is done on `phase-*` branches and merged via PR into
   `dev`; `main` is the release branch. Target `dev` for ongoing work.
-
-## Roadmap context
-
-- **Phase 0 (current)** — manual `/post <window>`, 3 fixed-angle candidates to disk.
-- **Phase 1** — `SessionEnd`/`SessionStart` hooks that stage and surface a nudge, gated.
-- **Phase 2** — package as an installable plugin + a small marketplace repo.
-- **Phase 3** — paid MCP layer to schedule/post approved drafts (draft-first, never silent).
