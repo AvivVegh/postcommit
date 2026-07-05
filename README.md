@@ -17,7 +17,17 @@ If yes, there's a product. If a 30-second DIY ask gets ~90% of the way there, th
 commands/post.md                    # /post <window> — the manual trigger
 skills/postcommit-extract/SKILL.md  # extraction how-to (git + JSONL parser)
 agents/post-writer.md               # the crown-jewels prompt (LinkedIn taste)
+scripts/link-local.sh               # symlink into ~/.claude/ for local iteration
 ```
+
+## Install (local, for iteration)
+
+```
+scripts/link-local.sh          # symlink command/skill/subagent into ~/.claude/
+scripts/link-local.sh --unlink # undo
+```
+
+Idempotent. Won't overwrite non-symlink files. Restart Claude Code once after linking; from then on, edits in this repo take effect on the next `/post` invocation.
 
 ## How to run the specificity test
 
