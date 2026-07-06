@@ -88,6 +88,12 @@ experiment by hand (see README) and the interactive install QA in
   file names not present in the bundle. Preserve this rule in any edit to the writer.
 - **Generated output** lands in `.postcommit/` (git-ignored). Drafts are named by UTC
   ISO timestamp with colons replaced by dashes for filesystem safety.
+- **Conventional commits and branches.** Both carry a type prefix — one of `feat`,
+  `fix`, `add`, `docs`, `chore`, `refactor`, `ci`. Commit subjects use
+  `type(scope): summary` (scope optional, imperative, no trailing period), e.g.
+  `feat(ci): add GitHub Actions workflow` or `fix(hooks): handle empty transcript`.
+  Branches use `type/short-desc`, e.g. `feat/ci-workflow`, `docs/commit-conventions`.
+  Not the old `phase-*` naming.
 
 ## Non-obvious details
 
@@ -96,8 +102,8 @@ experiment by hand (see README) and the interactive install QA in
   The extract skill filters records by `.timestamp` against the window cutoff.
 - The window argument accepts durations (`1d`, `4h`, `30m`), `today`, git ranges
   (`HEAD~3..HEAD`, `main..HEAD`, `<sha>..<sha>`), and `since=YYYY-MM-DD`.
-- Branching/PR flow: trunk-based on `main`. Do work on a short-lived `phase-*` (or
-  topic) branch and merge it via PR into `main`; there is no long-lived `dev` branch.
-  `main` is protected — the `validate` CI job must be green before merge. Releases are
-  cut from `main` by tagging `vX.Y.Z` (matching `plugin.json` `version`), which the
-  `version-guard` job enforces.
+- Branching/PR flow: trunk-based on `main`. Do work on a short-lived, conventionally
+  named branch (`type/short-desc` — see Conventions above) and merge it via PR into
+  `main`; there is no long-lived `dev` branch. `main` is protected — the `validate` CI
+  job must be green before merge. Releases are cut from `main` by tagging `vX.Y.Z`
+  (matching `plugin.json` `version`), which the `version-guard` job enforces.
