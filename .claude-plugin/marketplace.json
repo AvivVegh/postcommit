@@ -1,0 +1,13 @@
+{
+  "name": "postcommit",
+  "owner": {
+    "name": "Aviv Vegh"
+  },
+  "plugins": [
+    {
+      "name": "postcommit",
+      "source": "./",
+      "description": "Turn real dev work — git history plus Claude Code session transcripts — into candidate LinkedIn posts. Local-only, manually triggered via /post."
+    }
+  ]
+}

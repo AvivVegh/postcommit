@@ -17,14 +17,22 @@ product. Keep that experiment — not feature breadth — as the north star.
 ## Repository layout
 
 ```
-.claude-plugin/plugin.json          # plugin manifest (name, description, version)
+.claude-plugin/plugin.json          # plugin manifest (name, version, metadata)
+.claude-plugin/marketplace.json     # self-hosted marketplace listing this plugin
 commands/post.md                    # /post <window> — the manual trigger (thin dispatcher)
 skills/postcommit-extract/SKILL.md  # extractor: git + JSONL session parser → work bundle
 agents/post-writer.md               # the writer subagent — LinkedIn taste/template layer
-scripts/link-local.sh               # symlink command/skill/agent into ~/.claude/ for local iteration
+hooks/hooks.json                    # declares SessionEnd/SessionStart (auto-registered on install)
+scripts/link-local.sh               # dev-only: symlink command/skill/agent into ~/.claude/ for local iteration
 README.md                           # product framing, roadmap, how to run the wedge test
 .gitignore                          # ignores .postcommit/ (generated drafts) and .DS_Store
 ```
+
+Packaging note: the plugin is installed via `/plugin marketplace add AvivVegh/postcommit`
+then `/plugin install postcommit`. Hooks are registered from `hooks/hooks.json` using
+`${CLAUDE_PLUGIN_ROOT}` and removed automatically on uninstall — the `settings.json`
+surgery in `link-local.sh` is only for local symlink-based iteration, never for the
+published plugin.
 
 ## The three-part architecture (keep these boundaries clean)
 
