@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  # Automates the manual pre-flight in docs/smoke-test.md: manifests must parse,
+  # hook scripts must exist + be executable + compile, and the dev script must
+  # pass shellcheck. A broken manifest or hook syntax error ships straight to
+  # users, so this gates every PR to main.
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Manifests parse as JSON
+        run: |
+          for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks.json; do
+            python3 -m json.tool "$f" >/dev/null && echo "ok  $f" || { echo "BAD $f"; exit 1; }
+          done
+
+      - name: Hook scripts referenced in hooks.json exist and are executable
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys
+
+          with open("hooks/hooks.json") as fh:
+              cfg = json.load(fh)
+
+          # Collect every command string declared under any event.
+          commands = []
+          for entries in cfg.get("hooks", {}).values():
+              for entry in entries:
+                  for hook in entry.get("hooks", []):
+                      if hook.get("type") == "command" and hook.get("command"):
+                          commands.append(hook["command"])
+
+          if not commands:
+              sys.exit("no command hooks found in hooks/hooks.json")
+
+          failed = False
+          for command in commands:
+              # Resolve ${CLAUDE_PLUGIN_ROOT} to the repo root and take the first
+              # token, dropping the quotes that wrap the env var in the command.
+              resolved = command.replace("${CLAUDE_PLUGIN_ROOT}", ".")
+              path = resolved.strip().split()[0].replace('"', "")
+              if not os.path.isfile(path):
+                  print(f"BAD  missing: {path}")
+                  failed = True
+              elif not os.access(path, os.X_OK):
+                  print(f"BAD  not executable: {path}")
+                  failed = True
+              else:
+                  print(f"ok   {path}")
+
+          sys.exit(1 if failed else 0)
+          PY
+
+      - name: Byte-compile hook scripts
+        run: python3 -m py_compile hooks/session-end.py hooks/session-start.py hooks/postcommit_state.py
+
+      - name: Shellcheck dev script
+        run: shellcheck scripts/link-local.sh
+
+  # Non-blocking security lint of the hook scripts. continue-on-error keeps it
+  # advisory during initial adoption; drop that flag after a cleanup pass so it
+  # gates like the other checks.
+  security-scan:
+    name: security-scan
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install bandit
+        run: python3 -m pip install --upgrade bandit
+
+      - name: Scan hooks
+        run: python3 -m bandit -r hooks -ll
+
+  # Guards the "explicit version must be bumped every release or users never
+  # update" footgun from the plugin spec: on a published release, the git tag
+  # must equal plugin.json's version.
+  version-guard:
+    name: version-guard
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches plugin.json version
+        run: |
+          manifest_version="$(python3 -c 'import json; print(json.load(open(".claude-plugin/plugin.json"))["version"])')"
+          tag="${GITHUB_REF_NAME#v}"
+          echo "plugin.json version: $manifest_version"
+          echo "release tag (v-stripped): $tag"
+          if [ "$manifest_version" != "$tag" ]; then
+            echo "::error::Release tag '$GITHUB_REF_NAME' does not match plugin.json version '$manifest_version'"
+            exit 1
+          fi
+          echo "ok: tag matches plugin.json version"

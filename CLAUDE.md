@@ -55,9 +55,18 @@ subagent → 3 candidate drafts → saved to disk → opened in editor.
 
 ## Build / test / lint
 
-There is no build step, test suite, or linter — the plugin is Markdown prompt files
-plus one Bash script. "Testing" is running the wedge experiment by hand (see README).
+There is no build step or test suite — the plugin is Markdown prompt files plus a
+few Python hook scripts and one Bash script. "Testing" is running the wedge
+experiment by hand (see README) and the interactive install QA in
+`docs/smoke-test.md`.
 
+- CI: `.github/workflows/ci.yml` runs on every push/PR to `main`. The `validate`
+  job automates the `docs/smoke-test.md` pre-flight — manifests parse as JSON, the
+  hook scripts named in `hooks/hooks.json` exist and are `+x`, the three hooks
+  byte-compile (`py_compile`), and `scripts/link-local.sh` passes `shellcheck`.
+  `security-scan` runs `bandit -r hooks -ll` (non-blocking for now). `version-guard`
+  fires on a published release and asserts the git tag equals `plugin.json` `version`.
+  Keep CI green; `validate` is required before merge to `main`.
 - `scripts/link-local.sh` — symlink `commands/`, `skills/`, `agents/` into `~/.claude/`
   so `/post` works in Claude Code without publishing. Idempotent; refuses to overwrite
   non-symlink files. Restart Claude Code once after linking.
@@ -87,5 +96,8 @@ plus one Bash script. "Testing" is running the wedge experiment by hand (see REA
   The extract skill filters records by `.timestamp` against the window cutoff.
 - The window argument accepts durations (`1d`, `4h`, `30m`), `today`, git ranges
   (`HEAD~3..HEAD`, `main..HEAD`, `<sha>..<sha>`), and `since=YYYY-MM-DD`.
-- Branching/PR flow: Phase work is done on `phase-*` branches and merged via PR into
-  `dev`; `main` is the release branch. Target `dev` for ongoing work.
+- Branching/PR flow: trunk-based on `main`. Do work on a short-lived `phase-*` (or
+  topic) branch and merge it via PR into `main`; there is no long-lived `dev` branch.
+  `main` is protected — the `validate` CI job must be green before merge. Releases are
+  cut from `main` by tagging `vX.Y.Z` (matching `plugin.json` `version`), which the
+  `version-guard` job enforces.
