@@ -23,6 +23,7 @@ import postcommit_state as st  # noqa: E402
 
 POST_WORTHY_THRESHOLD = 5
 MAX_TRANSCRIPT_LINES = 8000  # cap work so the hook stays cheap on huge sessions
+IDLE_GAP_SECONDS = 15 * 60   # a gap longer than this counts as idle, not work
 
 _META_PREFIXES = (
     "<local-command-caveat>",
@@ -54,7 +55,12 @@ def parse_transcript(path):
     if not path or not os.path.exists(path):
         return sig
 
-    first = last = None
+    # "Active" minutes = sum of gaps between consecutive events, but only gaps
+    # shorter than IDLE_GAP_SECONDS. A session left open all day is mostly one
+    # giant idle gap, so it no longer reads as hours of work (false positive).
+    first = None
+    prev = None
+    active_seconds = 0
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             for i, line in enumerate(fh):
@@ -72,7 +78,11 @@ def parse_transcript(path):
                 if ts:
                     if first is None:
                         first = ts
-                    last = ts
+                    if prev is not None:
+                        gap = (ts - prev).total_seconds()
+                        if 0 < gap <= IDLE_GAP_SECONDS:
+                            active_seconds += gap
+                    prev = ts
 
                 rtype = rec.get("type")
                 if rtype == "user":
@@ -101,8 +111,7 @@ def parse_transcript(path):
         return sig
 
     sig["first_ts"] = first
-    if first and last and last > first:
-        sig["duration_min"] = int((last - first).total_seconds() // 60)
+    sig["duration_min"] = int(active_seconds // 60)
     return sig
 
 
