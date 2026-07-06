@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 #
-# link-local.sh — symlink this repo's command, skill, and subagent into
-# ~/.claude/ so /post is available in Claude Code without publishing the
-# plugin. Idempotent. Refuses to overwrite non-symlink files at the target.
-#
-# It also wires up the Phase 1 habit-loop hooks: it symlinks the state CLI to
-# ~/.postcommit/bin/postcommit-state and registers the SessionEnd / SessionStart
-# hooks in ~/.claude/settings.json (backing the file up first). --unlink undoes
-# all of it.
+# link-local.sh — set up postcommit for local Claude Code iteration without
+# publishing the plugin. It:
+#   1. installs the Python package as an editable `uv` tool so the `postcommit`
+#      CLI (used by the thin hooks and skill) is on PATH and tracks this checkout,
+#   2. symlinks this repo's command, skill, and subagent into ~/.claude/,
+#   3. registers the thin SessionEnd / SessionStart hooks in ~/.claude/settings.json
+#      (backing the file up first).
+# Idempotent. Refuses to overwrite non-symlink files at the target. --unlink
+# undoes all of it.
 #
 # Usage:
 #   scripts/link-local.sh          # link
@@ -17,9 +18,6 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLAUDE_DIR="${CLAUDE_HOME:-$HOME/.claude}"
-POSTCOMMIT_HOME="$HOME/.postcommit"
-STATE_CLI_LINK="$POSTCOMMIT_HOME/bin/postcommit-state"
-STATE_CLI_SRC="$REPO_ROOT/hooks/postcommit_state.py"
 SETTINGS="$CLAUDE_DIR/settings.json"
 
 # source_relative_to_repo   target_relative_to_claude_dir
@@ -80,22 +78,21 @@ unlink_one() {
   echo "  - removed: $dst"
 }
 
-link_state_cli() {
-  mkdir -p "$(dirname "$STATE_CLI_LINK")"
-  if [[ -L "$STATE_CLI_LINK" ]]; then
-    rm "$STATE_CLI_LINK"
-  elif [[ -e "$STATE_CLI_LINK" ]]; then
-    echo "  ✗ refusing to overwrite non-symlink: $STATE_CLI_LINK" >&2
+install_package() {
+  # Install the CLI as an editable uv tool so it's on PATH and tracks this
+  # checkout. The thin hooks and skill shell out to `postcommit`.
+  if ! command -v uv >/dev/null 2>&1; then
+    echo "  ✗ uv not found — install it (https://docs.astral.sh/uv/) then re-run," >&2
+    echo "    or 'pip install -e $REPO_ROOT' yourself so 'postcommit' is on PATH." >&2
     return 1
   fi
-  ln -s "$STATE_CLI_SRC" "$STATE_CLI_LINK"
-  echo "  + linked: $STATE_CLI_LINK → $STATE_CLI_SRC"
+  uv tool install --force --editable "$REPO_ROOT"
+  echo "  + installed editable uv tool: postcommit ($REPO_ROOT)"
 }
 
-unlink_state_cli() {
-  if [[ -L "$STATE_CLI_LINK" ]]; then
-    rm "$STATE_CLI_LINK"
-    echo "  - removed: $STATE_CLI_LINK"
+uninstall_package() {
+  if command -v uv >/dev/null 2>&1; then
+    uv tool uninstall postcommit >/dev/null 2>&1 && echo "  - uninstalled uv tool: postcommit" || true
   fi
 }
 
@@ -170,11 +167,11 @@ action="${1:-link}"
 case "$action" in
   link|--link|"")
     echo "linking postcommit → $CLAUDE_DIR"
+    install_package
     for row in "${LINKS[@]}"; do
       read -r src dst <<< "$row"
       link_one "$src" "$dst"
     done
-    link_state_cli
     hooks_settings register
     echo
     echo "done. restart Claude Code once so it discovers the new command/skill/subagent/hooks."
@@ -185,7 +182,7 @@ case "$action" in
       read -r src dst <<< "$row"
       unlink_one "$src" "$dst"
     done
-    unlink_state_cli
+    uninstall_package
     hooks_settings unregister
     ;;
   *)

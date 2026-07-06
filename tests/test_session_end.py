@@ -1,5 +1,5 @@
-"""Tests for hooks/session-end.py — scoring, transcript parsing, and the
-end-to-end recommendation staging."""
+"""Tests for the SessionEnd path — scoring, transcript parsing (postcommit.scoring),
+and the end-to-end recommendation staging through the thin hook shim."""
 
 import json
 import os
@@ -7,8 +7,18 @@ import tempfile
 import unittest
 
 from _support import (
-    init_repo, commit, write_transcript, user_msg, edit_msg, run_hook,
-    session_end as se, state as st,
+    commit,
+    edit_msg,
+    init_repo,
+    run_hook,
+    user_msg,
+    write_transcript,
+)
+from _support import (
+    scoring as se,
+)
+from _support import (
+    state as st,
 )
 
 
@@ -176,11 +186,11 @@ class FreshDraft(unittest.TestCase):
 
 class SummaryLine(unittest.TestCase):
     def test_pluralization_and_join(self):
-        line = se._summary_line(git_sig(n_commits=2, files=1), tx_sig(duration_min=15))
+        line = se.summary_line(git_sig(n_commits=2, files=1), tx_sig(duration_min=15))
         self.assertEqual(line, "2 commits, 1 file touched, ~15 min")
 
     def test_fallback_when_empty(self):
-        self.assertEqual(se._summary_line(git_sig(), tx_sig()), "recent work")
+        self.assertEqual(se.summary_line(git_sig(), tx_sig()), "recent work")
 
 
 class EndToEnd(unittest.TestCase):

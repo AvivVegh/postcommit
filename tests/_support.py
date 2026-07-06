@@ -1,16 +1,15 @@
 """Shared helpers for the postcommit test suite.
 
-Zero third-party deps — stdlib `unittest` only, mirroring the hooks themselves.
+Zero third-party deps — stdlib `unittest` only, mirroring the package itself.
 Two jobs live here:
 
-  1. Load the hook modules. Two of them have hyphenated filenames
-     (`session-end.py`, `session-start.py`) that a plain `import` can't reach,
-     so we load every hook by path via importlib.
+  1. Import the package modules under test (postcommit.*). The repo root is put
+     on sys.path so an editable install isn't required to run the suite.
   2. Build throwaway git repos and transcript JSONLs for the tests that need
-     real git output or a real session file.
+     real git output or a real session file, plus a subprocess runner that
+     drives the thin hook shims end-to-end.
 """
 
-import importlib.util
 import json
 import os
 import subprocess
@@ -19,21 +18,19 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HOOKS = os.path.join(ROOT, "hooks")
 
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
-def _load(name, filename):
-    """Import a hook module by file path (handles hyphenated filenames)."""
-    # The hooks do `import postcommit_state`, so their dir must be importable.
-    if HOOKS not in sys.path:
-        sys.path.insert(0, HOOKS)
-    spec = importlib.util.spec_from_file_location(name, os.path.join(HOOKS, filename))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+from postcommit import (  # noqa: E402,F401  (re-exported)
+    extract,
+    hooks,
+    scoring,
+    state,  # noqa: E402,F401  (re-exported)
+)
 
-
-state = _load("postcommit_state", "postcommit_state.py")
-session_end = _load("session_end", "session-end.py")
-session_start = _load("session_start", "session-start.py")
+# Back-compat aliases so tests can read naturally.
+session_end = hooks
+session_start = hooks
 
 
 # --- git fixtures -----------------------------------------------------------
@@ -95,27 +92,40 @@ def user_msg(content, ts=None, is_meta=False):
     return rec
 
 
-def edit_msg(tool_name, ts=None):
+def assistant_text(text, ts=None):
+    rec = {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+    if ts:
+        rec["timestamp"] = ts
+    return rec
+
+
+def tool_use_msg(tool_name, tool_input=None, ts=None):
     rec = {
         "type": "assistant",
-        "message": {"content": [{"type": "tool_use", "name": tool_name}]},
+        "message": {"content": [
+            {"type": "tool_use", "name": tool_name, "input": tool_input or {}}]},
     }
     if ts:
         rec["timestamp"] = ts
     return rec
 
 
-# --- subprocess runner for the hooks ----------------------------------------
+def edit_msg(tool_name, ts=None):
+    return tool_use_msg(tool_name, {}, ts)
+
+
+# --- subprocess runner for the thin hook shims ------------------------------
 
 
 def run_hook(script_basename, payload, home):
-    """Run a hook script end-to-end via subprocess.
+    """Run a thin hook shim end-to-end via subprocess.
 
-    Feeds `payload` on stdin as JSON and points HOME at `home` so the global
-    once-per-day cooldown file lands in a throwaway dir. Returns the
-    CompletedProcess (hooks always exit 0).
+    Feeds `payload` on stdin as JSON, points HOME at `home` so the global daily
+    cooldown file lands in a throwaway dir, and sets PYTHONPATH so the shim's
+    `python -m postcommit` fallback resolves the package from this checkout.
+    Returns the CompletedProcess (hooks always exit 0).
     """
-    env = dict(os.environ, HOME=home, **_GIT_ENV)
+    env = dict(os.environ, HOME=home, PYTHONPATH=ROOT, **_GIT_ENV)
     return subprocess.run(
         [sys.executable, os.path.join(HOOKS, script_basename)],
         input=json.dumps(payload),

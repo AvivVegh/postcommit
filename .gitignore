@@ -2,3 +2,14 @@
 .DS_Store
 __pycache__/
 *.pyc
+
+# Python build / packaging artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+
+# Tooling caches
+.ruff_cache/
+.pytest_cache/

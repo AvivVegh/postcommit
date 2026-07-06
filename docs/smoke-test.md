@@ -18,19 +18,30 @@ Do Pass A first. Only do Pass B once PR #6 is merged.
 
 ## Pre-flight (both passes)
 
-Sanity-check the manifests parse and the hook scripts are executable before you
-touch Claude Code:
+postcommit is code-first: the plugin's command/skill/hooks all shell out to the
+installed `postcommit` CLI. Install it first, then sanity-check the manifests and
+hook shims before you touch Claude Code:
 
 ```bash
+# 1. Install the CLI (the plugin adapters call it). From this checkout:
+uv tool install --force .        # or: pip install .   /  uv tool install postcommit
+postcommit --version             # must print e.g. "postcommit 0.2.0"
+
+# 2. Manifests parse and hook shims are executable.
 for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks.json; do
   python3 -m json.tool "$f" >/dev/null && echo "ok  $f" || echo "BAD $f"
 done
 test -x hooks/session-end.py   && echo "ok  session-end.py executable"   || echo "BAD session-end.py not +x"
 test -x hooks/session-start.py && echo "ok  session-start.py executable" || echo "BAD session-start.py not +x"
+
+# 3. The CLI produces a bundle in a repo with work:
+postcommit extract HEAD~1..HEAD | head -3
 ```
 
+- [ ] `postcommit --version` works (CLI on PATH).
 - [ ] All three JSON files parse.
-- [ ] Both hook scripts are executable.
+- [ ] Both hook shims are executable.
+- [ ] `postcommit extract` emits a work bundle.
 
 ---
 
@@ -75,7 +86,7 @@ Launch Claude Code with that env set. In Claude Code:
 /plugin install postcommit
 ```
 
-- [ ] Marketplace resolves from GitHub `main` and lists `postcommit` at `0.1.0`.
+- [ ] Marketplace resolves from GitHub `main` and lists `postcommit` at `0.2.0`.
 - [ ] Install completes clean.
 - [ ] `/post` and `/post-snooze` are available.
 - [ ] Skill + subagent listed.

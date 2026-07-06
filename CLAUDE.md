@@ -16,75 +16,111 @@ product. Keep that experiment — not feature breadth — as the north star.
 
 ## Repository layout
 
+postcommit is **code-first**: an installable Python package (`postcommit/`) holds the
+real logic, and the Claude Code plugin surface (command/skill/agent/hooks) are thin
+adapters that shell out to the installed `postcommit` CLI. This mirrors graphify.
+
 ```
-.claude-plugin/plugin.json          # plugin manifest (name, version, metadata)
+pyproject.toml                      # installable package: [project.scripts] postcommit + postcommit-mcp
+uv.lock                             # pinned resolution (core is dependency-free; mcp is a 3.10+ extra)
+postcommit/                         # the package — all deterministic logic lives here
+  __main__.py                       #   `postcommit` CLI dispatch: extract | state | hook | install
+  extract.py                        #   deterministic git + session-transcript → work bundle (ported SKILL.md)
+  scoring.py                        #   post-worthiness signals + scoring (from the old session-end)
+  state.py                          #   time/paths/json/watermark/git helpers + `state` verbs
+  hooks.py                          #   handle_session_end / handle_session_start
+  serve.py                          #   `postcommit-mcp` MCP server (optional [mcp] extra)
+  install.py                        #   write the skill adapter into a host (~/.claude)
+  data/skill.md                     #   the thin skill adapter, shipped as package-data
+.claude-plugin/plugin.json          # plugin manifest (name, version — kept in sync with pyproject)
 .claude-plugin/marketplace.json     # self-hosted marketplace listing this plugin
 commands/post.md                    # /post <window> — the manual trigger (thin dispatcher)
-skills/postcommit-extract/SKILL.md  # extractor: git + JSONL session parser → work bundle
+commands/post-snooze.md             # /post-snooze [days] — hush the nudge
+skills/postcommit-extract/SKILL.md  # thin skill adapter — mirror of postcommit/data/skill.md
 agents/post-writer.md               # the writer subagent — LinkedIn taste/template layer
 hooks/hooks.json                    # declares SessionEnd/SessionStart (auto-registered on install)
-scripts/link-local.sh               # dev-only: symlink command/skill/agent into ~/.claude/ for local iteration
+hooks/session-end.py                # thin shim → `postcommit hook session-end`
+hooks/session-start.py              # thin shim → `postcommit hook session-start`
+hooks/_adapter.py                   # shared forwarding logic for the two shims
+scripts/link-local.sh               # dev-only: uv-install editable + symlink command/skill/agent + register hooks
 scripts/run-tests.sh                # run the stdlib unittest suite (python3 -m unittest)
-tests/                              # unittest suite for the Python hooks (see below)
+tests/                              # unittest suite for the package (see below)
 README.md                           # product framing, roadmap, how to run the wedge test
-.gitignore                          # ignores .postcommit/ (generated drafts) and .DS_Store
+.gitignore                          # ignores .postcommit/, build artifacts, tooling caches
 ```
 
-Packaging note: the plugin is installed via `/plugin marketplace add AvivVegh/postcommit`
-then `/plugin install postcommit`. Hooks are registered from `hooks/hooks.json` using
-`${CLAUDE_PLUGIN_ROOT}` and removed automatically on uninstall — the `settings.json`
-surgery in `link-local.sh` is only for local symlink-based iteration, never for the
-published plugin.
+Distribution has two pieces: install the CLI (`uv tool install postcommit`) so the
+adapters have something to call, then install the plugin (`/plugin marketplace add
+AvivVegh/postcommit` → `/plugin install postcommit`). Hooks are registered from
+`hooks/hooks.json` using `${CLAUDE_PLUGIN_ROOT}` and removed automatically on uninstall
+— the `settings.json` surgery in `link-local.sh` is only for local iteration, never for
+the published plugin. `skills/postcommit-extract/SKILL.md` is a byte-for-byte mirror of
+`postcommit/data/skill.md`; keep them identical (the package-data copy is what
+`postcommit install` writes into other hosts).
 
-## The three-part architecture (keep these boundaries clean)
+## The architecture (keep these boundaries clean)
 
-The whole plugin is prompt engineering — three Markdown files with distinct jobs.
-When editing, respect the split:
+Two layers: **deterministic code** (the `postcommit` package) and **prompt/taste**
+(the writer subagent). The command/skill/hooks are thin glue between them.
 
-- **`commands/post.md` — the dispatcher.** Thin. Parses the window argument, invokes
-  the extract skill, hands the bundle to the subagent, saves the result to
-  `.postcommit/drafts/<UTC-ISO>.md`, and opens it. No creative or extraction logic here.
-- **`skills/postcommit-extract/SKILL.md` — the extractor.** Deterministic and
-  mechanical. Parses the git range and Claude Code session JSONLs into a compact
-  "work bundle." This is where privacy rules live (mask secrets, cap diff size, skip
-  sidechain/subagent records, no network).
-- **`agents/post-writer.md` — the writer.** Creative and opinionated. This is the
-  crown jewel — the file that decides whether a draft reads human or like slop.
+- **`postcommit/extract.py` — the extractor (code).** Deterministic and mechanical:
+  parses the window, gathers git state, locates and filters Claude Code session
+  JSONLs, caps the diff, masks secrets, and emits the work bundle. This is where the
+  privacy rules live (mask secrets, cap diff ~40k, ≤10 lines/snippet, skip sidechain
+  records, no network). The one judgment call — the "Candidate signal" — is left as a
+  stub for the model to fill.
+- **`skills/postcommit-extract/SKILL.md` — the extractor adapter (prompt).** Thin:
+  tells the model to run `postcommit extract <window>`, then fill the Candidate signal
+  from the bundle. Mirrors `postcommit/data/skill.md`.
+- **`commands/post.md` — the dispatcher (prompt).** Thin. Parses the window argument,
+  invokes the extract skill, hands the bundle to the subagent, saves the result to
+  `.postcommit/drafts/<UTC-ISO>.md`, and opens it. No creative or extraction logic.
+- **`agents/post-writer.md` — the writer (prompt).** Creative and opinionated. This is
+  the crown jewel — the file that decides whether a draft reads human or like slop.
   **Iterate here first** when improving output quality.
 
-Data flow: `/post <window>` → extract skill → work bundle (markdown) → post-writer
-subagent → 3 candidate drafts → saved to disk → opened in editor.
+Data flow: `/post <window>` → extract skill → `postcommit extract` (deterministic
+bundle) → model fills Candidate signal → post-writer subagent → 3 candidate drafts →
+saved to disk → opened in editor. The SessionEnd/SessionStart habit-loop is the same
+logic (`postcommit.hooks`/`scoring`/`state`), reached through the thin `hooks/` shims.
 
 ## Build / test / lint
 
-There is no build step — the product surface is Markdown prompt files. The only
-executable code is the Python hooks (plus two Bash scripts), and that code has a
-unit test suite. The three prompt files are still "tested" by hand: the wedge
-experiment (see README) and the interactive install QA in `docs/smoke-test.md`.
+The executable surface is the `postcommit` Python package (plus the thin hook shims
+and two Bash scripts). It has a unit test suite. The prompt files (writer, dispatcher,
+skill adapter) are still "tested" by hand: the wedge experiment (see README) and the
+interactive install QA in `docs/smoke-test.md`.
 
-- Tests: `scripts/run-tests.sh` (or `python3 -m unittest discover -s tests`) runs
-  the suite. It is **stdlib-only `unittest`** — no pytest, no pip install — to match
-  the hooks' dependency-free rule. Coverage lives under `tests/`:
-  `test_postcommit_state.py` (time/json/watermark/git helpers + the CLI verbs),
-  `test_session_end.py` (scoring, transcript parsing, shortstat parsing, and the
-  end-to-end recommendation staging), and `test_session_start.py` (the nudge text
-  plus all five SessionStart gates). `tests/_support.py` loads the hyphen-named hook
-  modules via importlib and builds throwaway git repos / transcript JSONLs. Tests
-  that touch git shell out to real `git`, and the SessionStart/SessionEnd hooks run
-  as subprocesses with `HOME` pointed at a temp dir so the global cooldown file
-  stays sandboxed. Add a test alongside any change to hook logic.
-- CI: `.github/workflows/ci.yml` runs on every push/PR to `main`. The `validate`
-  job automates the `docs/smoke-test.md` pre-flight — manifests parse as JSON, the
-  hook scripts named in `hooks/hooks.json` exist and are `+x`, the three hooks
-  byte-compile (`py_compile`), the `unittest` suite passes, and the Bash scripts
-  pass `shellcheck`. `security-scan` runs `bandit -r hooks -ll` (non-blocking for
-  now). `version-guard` fires on a published release and asserts the git tag equals
-  `plugin.json` `version`. Keep CI green; `validate` is required before merge to `main`.
-- `scripts/link-local.sh` — symlink `commands/`, `skills/`, `agents/` into `~/.claude/`
-  so `/post` works in Claude Code without publishing. Idempotent; refuses to overwrite
-  non-symlink files. Restart Claude Code once after linking.
-- `scripts/link-local.sh --unlink` — remove those symlinks.
-- The script is `set -euo pipefail`; keep it POSIX-friendly Bash and idempotent.
+- **Build/install:** `uv build` produces the wheel/sdist; `uv tool install .` (or
+  `pip install .`) installs the `postcommit` + `postcommit-mcp` entry points. The core
+  is **dependency-free** (stdlib only) so it installs anywhere; the MCP server needs
+  the `[mcp]` extra (`mcp>=1.2`, Python ≥3.10). `uv.lock` pins the resolution. Keep
+  the core stdlib-only — that's the privacy/portability guarantee.
+- **Tests:** `scripts/run-tests.sh` (or `python3 -m unittest discover -s tests`). It is
+  **stdlib-only `unittest`** — no pytest, no pip install. Coverage under `tests/`:
+  `test_postcommit_state.py` (time/json/watermark/git helpers + `state` verbs),
+  `test_session_end.py` (scoring, transcript parsing, shortstat, end-to-end staging),
+  `test_session_start.py` (nudge text + all five SessionStart gates),
+  `test_extract.py` (window parsing, secret masking, diff cap, transcript distillation,
+  bundle assembly), and `test_cli.py` (argparse dispatch, MCP graceful-degrade, install).
+  `tests/_support.py` imports the package (putting the repo root on `sys.path`) and
+  builds throwaway git repos / transcript JSONLs. `run_hook` drives the thin shims as
+  subprocesses with `HOME` at a temp dir and `PYTHONPATH` at the checkout so the
+  `python -m postcommit` fallback resolves. Add a test alongside any logic change.
+- **Lint:** `ruff check postcommit tests hooks` (config in `pyproject.toml`: E/F/I/B;
+  `UP` is intentionally off — the package uses `%`-formatting throughout, matching the
+  code it was ported from). `bandit -r postcommit hooks` is the security lint.
+- **CI:** `.github/workflows/ci.yml`. `validate` (required before merge) parses
+  manifests, checks `plugin.json`/`pyproject.toml` versions agree, verifies the hooks
+  in `hooks.json` exist + are `+x`, byte-compiles the hooks + package, installs the
+  package and smoke-tests the CLI, runs `ruff` and the `unittest` suite, and
+  `shellcheck`s the scripts. `test-matrix` reruns the suite on Python 3.9/3.10/3.11.
+  `security-scan` runs `bandit` (non-blocking). `version-guard` (on release) asserts
+  the git tag equals `plugin.json` `version`.
+- `scripts/link-local.sh` — uv-install the package editable, symlink `commands/`,
+  `skills/`, `agents/` into `~/.claude/`, and register the hooks so `/post` works
+  without publishing. `--unlink` undoes it. Idempotent; refuses to overwrite
+  non-symlink files. `set -euo pipefail`; keep it POSIX-friendly and idempotent.
 
 ## Conventions and idioms
 
@@ -112,7 +148,9 @@ experiment (see README) and the interactive install QA in `docs/smoke-test.md`.
 
 - Session transcripts live at `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`, where
   `<encoded-cwd>` is the absolute cwd with every `/` replaced by `-` and a leading `-`.
-  The extract skill filters records by `.timestamp` against the window cutoff.
+  `postcommit.extract.transcript_dir` computes that and also tries a `.`-folded variant
+  (some Claude Code versions fold `.` to `-`), then filters records by `.timestamp`
+  against the window cutoff.
 - The window argument accepts durations (`1d`, `4h`, `30m`), `today`, git ranges
   (`HEAD~3..HEAD`, `main..HEAD`, `<sha>..<sha>`), and `since=YYYY-MM-DD`.
 - Branching/PR flow: trunk-based on `main`. Do work on a short-lived, conventionally
