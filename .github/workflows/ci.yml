@@ -73,8 +73,13 @@ jobs:
       - name: Byte-compile hook scripts
         run: python3 -m py_compile hooks/session-end.py hooks/session-start.py hooks/postcommit_state.py
 
-      - name: Shellcheck dev script
-        run: shellcheck scripts/link-local.sh
+      - name: Unit tests
+        # stdlib unittest only — no deps to install. Fixtures shell out to git,
+        # which is preinstalled on ubuntu-latest.
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Shellcheck dev scripts
+        run: shellcheck scripts/link-local.sh scripts/run-tests.sh
 
   # Non-blocking security lint of the hook scripts. continue-on-error keeps it
   # advisory during initial adoption; drop that flag after a cleanup pass so it
