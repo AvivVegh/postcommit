@@ -24,6 +24,8 @@ skills/postcommit-extract/SKILL.md  # extractor: git + JSONL session parser → 
 agents/post-writer.md               # the writer subagent — LinkedIn taste/template layer
 hooks/hooks.json                    # declares SessionEnd/SessionStart (auto-registered on install)
 scripts/link-local.sh               # dev-only: symlink command/skill/agent into ~/.claude/ for local iteration
+scripts/run-tests.sh                # run the stdlib unittest suite (python3 -m unittest)
+tests/                              # unittest suite for the Python hooks (see below)
 README.md                           # product framing, roadmap, how to run the wedge test
 .gitignore                          # ignores .postcommit/ (generated drafts) and .DS_Store
 ```
@@ -55,18 +57,29 @@ subagent → 3 candidate drafts → saved to disk → opened in editor.
 
 ## Build / test / lint
 
-There is no build step or test suite — the plugin is Markdown prompt files plus a
-few Python hook scripts and one Bash script. "Testing" is running the wedge
-experiment by hand (see README) and the interactive install QA in
-`docs/smoke-test.md`.
+There is no build step — the product surface is Markdown prompt files. The only
+executable code is the Python hooks (plus two Bash scripts), and that code has a
+unit test suite. The three prompt files are still "tested" by hand: the wedge
+experiment (see README) and the interactive install QA in `docs/smoke-test.md`.
 
+- Tests: `scripts/run-tests.sh` (or `python3 -m unittest discover -s tests`) runs
+  the suite. It is **stdlib-only `unittest`** — no pytest, no pip install — to match
+  the hooks' dependency-free rule. Coverage lives under `tests/`:
+  `test_postcommit_state.py` (time/json/watermark/git helpers + the CLI verbs),
+  `test_session_end.py` (scoring, transcript parsing, shortstat parsing, and the
+  end-to-end recommendation staging), and `test_session_start.py` (the nudge text
+  plus all five SessionStart gates). `tests/_support.py` loads the hyphen-named hook
+  modules via importlib and builds throwaway git repos / transcript JSONLs. Tests
+  that touch git shell out to real `git`, and the SessionStart/SessionEnd hooks run
+  as subprocesses with `HOME` pointed at a temp dir so the global cooldown file
+  stays sandboxed. Add a test alongside any change to hook logic.
 - CI: `.github/workflows/ci.yml` runs on every push/PR to `main`. The `validate`
   job automates the `docs/smoke-test.md` pre-flight — manifests parse as JSON, the
   hook scripts named in `hooks/hooks.json` exist and are `+x`, the three hooks
-  byte-compile (`py_compile`), and `scripts/link-local.sh` passes `shellcheck`.
-  `security-scan` runs `bandit -r hooks -ll` (non-blocking for now). `version-guard`
-  fires on a published release and asserts the git tag equals `plugin.json` `version`.
-  Keep CI green; `validate` is required before merge to `main`.
+  byte-compile (`py_compile`), the `unittest` suite passes, and the Bash scripts
+  pass `shellcheck`. `security-scan` runs `bandit -r hooks -ll` (non-blocking for
+  now). `version-guard` fires on a published release and asserts the git tag equals
+  `plugin.json` `version`. Keep CI green; `validate` is required before merge to `main`.
 - `scripts/link-local.sh` — symlink `commands/`, `skills/`, `agents/` into `~/.claude/`
   so `/post` works in Claude Code without publishing. Idempotent; refuses to overwrite
   non-symlink files. Restart Claude Code once after linking.
