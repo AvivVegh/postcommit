@@ -13,25 +13,48 @@ If yes, there's a product. If a 30-second DIY ask gets ~90% of the way there, th
 ## What's in the box
 
 ```
-.claude-plugin/plugin.json          # minimal manifest (Phase 2 packaging)
+.claude-plugin/plugin.json          # plugin manifest (name, version, metadata)
+.claude-plugin/marketplace.json     # self-hosted marketplace listing (Phase 2)
 commands/post.md                    # /post <window> — the manual trigger
 commands/post-snooze.md             # /post-snooze [days] — hush the nudge
 skills/postcommit-extract/SKILL.md  # extraction how-to (git + JSONL parser)
 agents/post-writer.md               # the crown-jewels prompt (LinkedIn taste)
+hooks/hooks.json                    # declares the two hooks (auto-registered on install)
 hooks/session-end.py                # Phase 1: stage a recommendation if post-worthy
 hooks/session-start.py              # Phase 1: surface it as an ambient nudge
 hooks/postcommit_state.py           # Phase 1: state lib + CLI (watermark/snooze)
-scripts/link-local.sh               # symlink into ~/.claude/ + register hooks
+scripts/link-local.sh               # dev-only: symlink into ~/.claude/ + register hooks
 ```
+
+## Install
+
+This repo is its own Claude Code plugin marketplace. In Claude Code:
+
+```
+/plugin marketplace add AvivVegh/postcommit
+/plugin install postcommit
+```
+
+Installing registers the `/post` and `/post-snooze` commands, the extract skill, the
+post-writer subagent, and the two Phase 1 hooks (via `hooks/hooks.json`). Uninstalling
+removes all of them — including the hooks — automatically. No manual `settings.json`
+editing.
+
+To update later: `/plugin update postcommit` (picks up a new `version` in the manifest).
 
 ## Install (local, for iteration)
 
+For hacking on the plugin itself without publishing, symlink it into `~/.claude/`:
+
 ```
-scripts/link-local.sh          # symlink command/skill/subagent into ~/.claude/
+scripts/link-local.sh          # symlink command/skill/subagent + register hooks
 scripts/link-local.sh --unlink # undo
 ```
 
-Idempotent. Won't overwrite non-symlink files. Restart Claude Code once after linking; from then on, edits in this repo take effect on the next `/post` invocation.
+Idempotent. Won't overwrite non-symlink files. Restart Claude Code once after linking;
+from then on, edits in this repo take effect on the next `/post` invocation. Use this
+**or** the plugin install above, not both at once — they register the same hooks two
+different ways.
 
 ## How to run the specificity test
 
