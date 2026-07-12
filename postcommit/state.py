@@ -33,13 +33,22 @@ def iso(dt):
 
 
 def parse_iso(s):
-    """Parse an ISO timestamp (with or without trailing Z). None on failure."""
+    """Parse an ISO timestamp (with or without trailing Z). None on failure.
+
+    Always returns a timezone-aware datetime: a value that parses without an
+    offset is assumed UTC. This keeps every downstream comparison/subtraction
+    tz-safe — mixing a naive and an aware datetime raises TypeError, which the
+    transcript loops (guarded only by `except OSError`) would not catch.
+    """
     if not s:
         return None
     try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def today_local():

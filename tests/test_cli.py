@@ -112,6 +112,49 @@ class Install(unittest.TestCase):
         with open(dest, encoding="utf-8") as fh:
             self.assertIn("postcommit extract", fh.read())
 
+    def test_conflicting_host_flags_rejected(self):
+        # --claude and --no-claude are mutually exclusive; passing both must be
+        # an argparse error rather than silently installing.
+        with self.assertRaises(SystemExit):
+            _capture(["install", "--claude", "--no-claude"])
+
+    def _fake_home(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        saved = os.environ.get("HOME")
+        os.environ["HOME"] = tmp.name
+        self.addCleanup(lambda: os.environ.__setitem__("HOME", saved) if saved
+                        else os.environ.pop("HOME", None))
+        return tmp.name
+
+    def test_does_not_write_through_a_symlink(self):
+        home = self._fake_home()
+        # A repo-tracked SKILL.md that link-local would symlink into ~/.claude.
+        repo_skill = os.path.join(home, "repo_SKILL.md")
+        with open(repo_skill, "w", encoding="utf-8") as fh:
+            fh.write("MY CUSTOM SKILL")
+        dest = installer.claude_skill_path()
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        os.symlink(repo_skill, dest)
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.install(claude=True)
+        # the symlinked repo source must be left untouched
+        with open(repo_skill, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "MY CUSTOM SKILL")
+
+    def test_backs_up_an_existing_customized_file(self):
+        self._fake_home()
+        dest = installer.claude_skill_path()
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "w", encoding="utf-8") as fh:
+            fh.write("HAND EDITED")
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer.install(claude=True)
+        with open(dest + ".bak", encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "HAND EDITED")  # customization preserved
+        with open(dest, encoding="utf-8") as fh:
+            self.assertIn("postcommit extract", fh.read())  # package copy written
+
 
 if __name__ == "__main__":
     unittest.main()

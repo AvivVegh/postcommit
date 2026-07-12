@@ -152,6 +152,39 @@ class ParseTranscript(unittest.TestCase):
         path = self._write([edit_msg("Read"), edit_msg("Bash"), edit_msg("Grep")])
         self.assertEqual(se.parse_transcript(path)["n_edits"], 0)
 
+    def test_sidechain_records_ignored(self):
+        # Sub-agent (sidechain) prompts/edits must not inflate the score — the
+        # bundle narrative excludes them, so scoring has to as well.
+        path = self._write([
+            user_msg("real prompt with a bug", ts="2026-07-05T10:00:00Z"),
+            {"isSidechain": True, "type": "assistant",
+             "message": {"content": [
+                 {"type": "tool_use", "name": "Edit", "input": {}}]},
+             "timestamp": "2026-07-05T10:01:00Z"},
+            {"isSidechain": True, "type": "user",
+             "message": {"content": "subagent chatter"},
+             "timestamp": "2026-07-05T10:02:00Z"},
+        ])
+        sig = se.parse_transcript(path)
+        self.assertEqual(sig["n_user_prompts"], 1)  # sidechain user not counted
+        self.assertEqual(sig["n_edits"], 0)         # sidechain edit not counted
+
+
+class GitSignalsFallback(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = init_repo(os.path.join(self.tmp.name, "repo"))
+
+    def test_committed_churn_counted_without_last_posted_head(self):
+        # A clean-tree day with one sizable commit and no prior post. The
+        # fallback must measure the *committed* churn — `git diff` ignores
+        # `--since`, so the old code saw the (empty) worktree and scored zero.
+        commit(self.repo, "big.py", "x = 1\n" * 200, "feat: big day")
+        sig = se.git_signals(self.repo, None)
+        self.assertEqual(sig["n_commits"], 1)
+        self.assertGreaterEqual(sig["insertions"], 200)
+
     def test_malformed_lines_skipped(self):
         path = os.path.join(self.tmp.name, "s.jsonl")
         with open(path, "w", encoding="utf-8") as fh:

@@ -77,6 +77,41 @@ class MaskSecrets(unittest.TestCase):
         diff = "+def add(a, b):\n+    return a + b"
         self.assertEqual(ex.mask_secrets(diff), diff)
 
+    def test_redacts_env_file_by_extension(self):
+        # `.env` files were not treated as sensitive before — only `secrets*` /
+        # `credentials*` / key material. A plain prod.env leaked in full.
+        diff = "\n".join([
+            "diff --git a/config/prod.env b/config/prod.env",
+            "+++ b/config/prod.env",
+            "+DATABASE_URL=postgres://u:p@host/db",
+        ])
+        out = ex.mask_secrets(diff)
+        self.assertIn("redacted — sensitive file", out)
+        self.assertNotIn("postgres://u:p@host/db", out)
+
+
+class ScrubText(unittest.TestCase):
+    def test_masks_bearer_token(self):
+        out = ex.scrub_text("curl -H 'Authorization: Bearer sk-live-abcdef123456' x")
+        self.assertNotIn("sk-live-abcdef123456", out)
+        self.assertIn("***", out)
+
+    def test_masks_url_credentials(self):
+        out = ex.scrub_text("git remote add o https://user:s3cretPass@github.com/a/b")
+        self.assertNotIn("s3cretPass", out)
+
+    def test_masks_inline_secret_assignment(self):
+        out = ex.scrub_text("export DATABASE_PASSWORD=hunter2trustno1")
+        self.assertNotIn("hunter2trustno1", out)
+
+    def test_masks_aws_access_key(self):
+        out = ex.scrub_text("id = AKIAIOSFODNN7EXAMPLE")
+        self.assertNotIn("AKIAIOSFODNN7EXAMPLE", out)
+
+    def test_leaves_ordinary_text_untouched(self):
+        s = "a normal sentence about parsers and tokens of thought"
+        self.assertEqual(ex.scrub_text(s), s)
+
 
 class CapDiff(unittest.TestCase):
     def test_short_diff_is_unchanged(self):
@@ -136,6 +171,54 @@ class DistillSession(unittest.TestCase):
         ])
         block = ex.distill_session(path, None)
         self.assertNotIn("SECRET_BODY", "\n".join(block["lines"]))
+
+    def test_scrubs_secrets_from_prompt_command_and_assistant_text(self):
+        from _support import assistant_text, tool_use_msg, user_msg
+        path = self._write([
+            user_msg("use token=ghp_abcdefabcdefabcdef1234 to auth",
+                     ts="2026-07-05T10:00:00Z"),
+            tool_use_msg("Bash",
+                         {"command": "curl -H 'Authorization: Bearer sk-live-zzzzzzzzzzzz' u"},
+                         ts="2026-07-05T10:01:00Z"),
+            assistant_text("the key is AKIAIOSFODNN7EXAMPLE now",
+                           ts="2026-07-05T10:02:00Z"),
+        ])
+        text = "\n".join(ex.distill_session(path, None)["lines"])
+        self.assertNotIn("ghp_abcdefabcdefabcdef1234", text)
+        self.assertNotIn("sk-live-zzzzzzzzzzzz", text)
+        self.assertNotIn("AKIAIOSFODNN7EXAMPLE", text)
+
+
+class TranscriptDir(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def _proj(self, records):
+        d = os.path.join(self.tmp.name, "enc")
+        os.makedirs(d)
+        write_transcript(os.path.join(d, "s.jsonl"), records)
+        return d
+
+    def test_rejects_dir_belonging_to_a_different_cwd(self):
+        # `.`->`-` folding makes foo.bar and foo-bar collide; the recorded cwd
+        # is what disambiguates them.
+        d = self._proj([{"type": "user", "cwd": "/Users/me/foo-bar",
+                         "message": {"content": "x"}}])
+        self.assertFalse(ex._dir_is_for_cwd(d, "/Users/me/foo.bar"))
+
+    def test_accepts_matching_cwd(self):
+        d = self._proj([{"type": "user", "cwd": "/Users/me/foo.bar",
+                         "message": {"content": "x"}}])
+        self.assertTrue(ex._dir_is_for_cwd(d, "/Users/me/foo.bar"))
+
+    def test_accepts_when_no_cwd_recorded(self):
+        d = self._proj([{"type": "user", "message": {"content": "x"}}])
+        self.assertTrue(ex._dir_is_for_cwd(d, "/Users/me/foo.bar"))
+
+    def test_transcript_files_empty_for_none_cutoff(self):
+        # A None cutoff (empty git range) must not scope in every session.
+        self.assertEqual(ex._transcript_files(self.tmp.name, None), [])
 
 
 class BuildBundle(unittest.TestCase):

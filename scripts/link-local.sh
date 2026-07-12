@@ -167,7 +167,13 @@ action="${1:-link}"
 case "$action" in
   link|--link|"")
     echo "linking postcommit → $CLAUDE_DIR"
-    install_package
+    # Don't let a missing `uv` (install_package -> return 1) abort the whole
+    # script under `set -e` before the symlinks/hooks are wired. Testing it in
+    # the `if` condition keeps `set -e` from tripping.
+    if ! install_package; then
+      echo "  ⚠ continuing without the editable CLI — put 'postcommit' on PATH" \
+           "yourself ('pip install -e $REPO_ROOT') so the hooks can find it." >&2
+    fi
     for row in "${LINKS[@]}"; do
       read -r src dst <<< "$row"
       link_one "$src" "$dst"

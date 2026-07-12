@@ -17,6 +17,9 @@ POST_WORTHY_THRESHOLD = 5
 MAX_TRANSCRIPT_LINES = 8000  # cap work so the hook stays cheap on huge sessions
 IDLE_GAP_SECONDS = 15 * 60   # a gap longer than this counts as idle, not work
 
+# git's well-known empty-tree object — diff against it to size a root commit.
+_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
 _META_PREFIXES = (
     "<local-command-caveat>",
     "<command-name>",
@@ -64,6 +67,12 @@ def parse_transcript(path):
                 try:
                     rec = json.loads(line)
                 except ValueError:
+                    continue
+
+                # Skip sub-agent (sidechain) records so the human's own work is
+                # what's scored — matching extract.distill_session, which also
+                # drops them from the bundle narrative.
+                if rec.get("isSidechain"):
                     continue
 
                 ts = st.parse_iso(rec.get("timestamp"))
@@ -123,7 +132,14 @@ def git_signals(cwd, last_posted_head):
         diffstat = st.git(cwd, "diff", "--shortstat", rng)
     else:
         log = st.git(cwd, "log", "--oneline", "--since=1 day ago")
-        diffstat = st.git(cwd, "diff", "--shortstat", "--since=1 day ago")
+        # `git diff` silently ignores --since (it is a log-only option), so the
+        # committed churn for the last day has to come from a real base rev:
+        # the newest commit *older* than the window. When the whole history is
+        # inside the day, diff against the empty tree instead.
+        base = (st.git(cwd, "rev-list", "-1", "--before=1 day ago", "HEAD")
+                or "").strip()
+        rng = "%s..HEAD" % (base or _EMPTY_TREE)
+        diffstat = st.git(cwd, "diff", "--shortstat", rng)
 
     if log:
         sig["n_commits"] = len([ln for ln in log.splitlines() if ln.strip()])

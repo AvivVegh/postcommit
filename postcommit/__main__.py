@@ -112,10 +112,11 @@ def build_parser():
     ph.set_defaults(func=cmd_hook)
 
     pi = sub.add_parser("install", help="write the skill adapter into a host")
-    pi.add_argument("--claude", action="store_true",
-                    help="install into ~/.claude (default)")
-    pi.add_argument("--no-claude", action="store_true",
-                    help="skip the Claude Code install")
+    pi_host = pi.add_mutually_exclusive_group()
+    pi_host.add_argument("--claude", action="store_true",
+                         help="install into ~/.claude (default)")
+    pi_host.add_argument("--no-claude", action="store_true",
+                         help="skip the Claude Code install")
     pi.set_defaults(func=cmd_install)
 
     return p

@@ -35,6 +35,15 @@ class TimeHelpers(unittest.TestCase):
     def test_parse_iso_accepts_plain_offset(self):
         self.assertIsNotNone(st.parse_iso("2026-07-05T17:06:30+00:00"))
 
+    def test_parse_iso_naive_input_is_assumed_utc(self):
+        # A timestamp with no offset must return tz-aware (UTC); otherwise
+        # comparing it to an aware cutoff raises TypeError in the transcript
+        # loops, which are guarded only by `except OSError`.
+        dt = st.parse_iso("2026-07-05T10:00:00")
+        self.assertIsNotNone(dt)
+        self.assertIsNotNone(dt.tzinfo)
+        self.assertEqual(dt.utcoffset().total_seconds(), 0)
+
 
 class JsonIO(unittest.TestCase):
     def setUp(self):

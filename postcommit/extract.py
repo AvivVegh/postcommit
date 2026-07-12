@@ -177,17 +177,57 @@ def _shortstat_nums(text):
 # --- diff hygiene: secret masking + size cap -------------------------------
 
 _SENSITIVE_FILE_RE = re.compile(
-    r"(^|/)(credentials|secrets?)[^/]*$|\.(pem|key|p12|pfx)$", re.IGNORECASE)
-# Letter-only boundaries so `auth_token` / `API_KEY` match (underscores and
-# quotes are treated as delimiters) while `tokens` / `tokenizer` do not.
-_SECRET_KEY_RE = re.compile(
-    r"(?i)(?<![a-z])(api[_-]?key|access[_-]?key|private[_-]?key|"
-    r"client[_-]?secret|secret|token|password|passwd|bearer|credential)(?![a-z])")
-_ASSIGN_RE = re.compile(r"^([+\- ]?\s*[^=:]{1,80}?[=:]\s*)(.+)$")
+    r"(^|/)(credentials|secrets?)[^/]*$"       # credentials*, secret*, secrets*
+    r"|(^|/)[^/]*\.env(\.[^/]*)?$"             # .env, .env.local, prod.env
+    r"|\.(pem|key|p12|pfx)$", re.IGNORECASE)   # key / certificate material
+
+# Substring redactions that apply to ANY text — diff lines, prompts, shell
+# commands, assistant output — not just `key = value` on a line of its own.
+# Letter boundaries keep `auth_token=` matching while sparing `tokenizer`.
+_INLINE_SECRET_RE = re.compile(
+    r"(?i)((?:api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|"
+    r"secret|token|password|passwd|bearer|credential)s?[\"']?\s*[=:]\s*[\"']?)"
+    r"([^\s\"';,)&]+)")
+_URL_CRED_RE = re.compile(r"([a-z][a-z0-9+.\-]*://[^/\s:@]+:)[^/\s@]+@")
+# `Authorization: Bearer <token>` / a bare `Bearer <token>` — the token follows
+# whitespace, not an `=`/`:`, so it is not covered by _INLINE_SECRET_RE.
+_BEARER_RE = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]{6,}")
+_TOKEN_RE = re.compile(
+    r"(?i)(?<![a-z0-9])("
+    r"sk-[a-z0-9][a-z0-9-]{7,}"                               # OpenAI/Stripe-style
+    r"|gh[pousr]_[a-z0-9]{16,}"                               # GitHub tokens
+    r"|AKIA[0-9A-Z]{12,}"                                     # AWS access key id
+    r"|xox[baprs]-[a-z0-9-]{8,}"                              # Slack tokens
+    r"|eyJ[a-z0-9_\-]{8,}\.[a-z0-9_\-]{8,}\.[a-z0-9_\-]{6,}"  # JWT
+    r")(?![a-z0-9])")
+
+
+def scrub_text(text):
+    """Redact secret-looking substrings from arbitrary text.
+
+    Works on any string — a prompt, a shell command, assistant output — not
+    only diff-formatted lines. Masks `key=value` / `key: value` secrets, URL
+    credentials (`scheme://user:pass@host`), `Bearer <token>`, and well-known
+    token shapes. This is the single choke point the privacy rule ("mask
+    secrets") relies on, so everything user-authored or transcript-derived must
+    pass through it.
+    """
+    if not text:
+        return text
+    text = _URL_CRED_RE.sub(r"\1***@", text)
+    text = _BEARER_RE.sub(r"\1***", text)
+    text = _INLINE_SECRET_RE.sub(r"\1***", text)
+    text = _TOKEN_RE.sub("***", text)
+    return text
 
 
 def mask_secrets(diff):
-    """Redact secret-looking values and the bodies of sensitive files."""
+    """Redact secret-looking values and the bodies of sensitive files.
+
+    Sensitive-file content lines are dropped wholesale; every other line runs
+    through `scrub_text`, so secrets leak neither from ordinary diff bodies nor
+    from `@@`-hunk-header context.
+    """
     if not diff:
         return diff
     out = []
@@ -205,16 +245,10 @@ def mask_secrets(diff):
             out.append(line)
             continue
         # content lines of a diff start with +, -, or a space
-        if line[:1] in ("+", "-", " ") and not line.startswith(("+++", "---")):
-            if sensitive_file:
-                out.append(line[:1] + " [redacted — sensitive file]")
-                continue
-            if _SECRET_KEY_RE.search(line):
-                m = _ASSIGN_RE.match(line)
-                if m:
-                    out.append(m.group(1) + "***")
-                    continue
-        out.append(line)
+        if sensitive_file and line[:1] in ("+", "-", " "):
+            out.append(line[:1] + " [redacted — sensitive file]")
+            continue
+        out.append(scrub_text(line))
     return "\n".join(out)
 
 
@@ -261,12 +295,52 @@ _META_PREFIXES = (
 _EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 
+def _dir_is_for_cwd(cand, abscwd):
+    """Confirm a candidate project dir actually belongs to `abscwd`.
+
+    Claude Code records the session `cwd` in transcript records, so we can
+    disambiguate an encoding collision by reading it back. Returns True on a
+    confirmed match; if no record carries a `cwd` at all we can't tell, so we
+    fall back to True rather than drop a legitimate directory.
+    """
+    try:
+        names = [n for n in os.listdir(cand) if n.endswith(".jsonl")]
+    except OSError:
+        return False
+    saw_cwd = False
+    for name in names:
+        try:
+            with open(os.path.join(cand, name), encoding="utf-8",
+                      errors="replace") as fh:
+                for i, raw in enumerate(fh):
+                    if i >= 50:
+                        break
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        rec = json.loads(raw)
+                    except ValueError:
+                        continue
+                    c = rec.get("cwd")
+                    if c:
+                        saw_cwd = True
+                        if os.path.abspath(c) == abscwd:
+                            return True
+        except OSError:
+            continue
+    return not saw_cwd
+
+
 def transcript_dir(cwd):
     """Locate the Claude Code project dir for `cwd`, or None if absent.
 
     Claude Code encodes the absolute cwd by replacing path separators with `-`
-    (documented rule). Some versions also fold `.` to `-`, so we try both and
-    return whichever directory exists.
+    (documented rule). Some versions also fold `.` to `-`. The `.`-folded form
+    is ambiguous — `foo.bar` and `foo-bar` both encode to `-...-foo-bar` — so we
+    take the exact encoding as-is but verify the folded fallback against the
+    session's recorded `cwd` before trusting it, to avoid emitting a sibling
+    repo's transcripts.
     """
     abscwd = os.path.abspath(cwd)
     base = os.path.join(os.path.expanduser("~"), ".claude", "projects")
@@ -275,15 +349,22 @@ def transcript_dir(cwd):
     for enc in (slash_only, also_dots):
         cand = os.path.join(base, enc)
         if os.path.isdir(cand):
-            return cand
+            if enc == slash_only or _dir_is_for_cwd(cand, abscwd):
+                return cand
     return None
 
 
 def _transcript_files(cwd, cutoff):
+    # A None cutoff means the window resolved to no commits (e.g. an empty git
+    # range like `HEAD..HEAD`). Without a lower bound every session in the repo
+    # would be scoped in, blowing past the requested window, so treat "no
+    # cutoff" as "no transcripts".
+    if cutoff is None:
+        return []
     d = transcript_dir(cwd)
     if not d:
         return []
-    cut_ts = cutoff.timestamp() if cutoff else None
+    cut_ts = cutoff.timestamp()
     picked = []
     try:
         for name in os.listdir(d):
@@ -294,7 +375,7 @@ def _transcript_files(cwd, cutoff):
                 mtime = os.path.getmtime(path)
             except OSError:
                 continue
-            if cut_ts is None or mtime >= cut_ts:
+            if mtime >= cut_ts:
                 picked.append((mtime, path))
     except OSError:
         return []
@@ -317,7 +398,7 @@ def _tool_summary(name, inp):
         detail = inp.get("file_path") or inp.get("path") or ""
     elif name in ("Grep", "Glob"):
         detail = inp.get("pattern") or ""
-    detail = _collapse(mask_secrets(detail)) if detail else ""
+    detail = _collapse(scrub_text(detail)) if detail else ""
     line = ("%s: %s" % (name, detail)).strip().rstrip(":")
     return line[:MAX_TOOL_CHARS]
 
@@ -353,7 +434,7 @@ def distill_session(path, cutoff):
                         and not rec.get("isMeta")
                         and not content.lstrip().startswith(_META_PREFIXES)
                     ):
-                        text = _collapse(content)[:MAX_PROMPT_CHARS]
+                        text = _collapse(scrub_text(content))[:MAX_PROMPT_CHARS]
                         if text:
                             lines.append("> " + text)
                             added = True
@@ -366,7 +447,8 @@ def distill_session(path, cutoff):
                         if btype == "text":
                             head = _first_line(block.get("text", ""))
                             if head:
-                                lines.append("- " + head[:MAX_LINE_CHARS])
+                                lines.append(
+                                    "- " + scrub_text(head)[:MAX_LINE_CHARS])
                                 added = True
                         elif btype == "tool_use":
                             summ = _tool_summary(block.get("name", "?"),
