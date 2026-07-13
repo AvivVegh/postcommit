@@ -92,7 +92,9 @@ install_package() {
 
 uninstall_package() {
   if command -v uv >/dev/null 2>&1; then
-    uv tool uninstall postcommit >/dev/null 2>&1 && echo "  - uninstalled uv tool: postcommit" || true
+    if uv tool uninstall postcommit >/dev/null 2>&1; then
+      echo "  - uninstalled uv tool: postcommit"
+    fi
   fi
 }
 
