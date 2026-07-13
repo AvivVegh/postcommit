@@ -13,3 +13,6 @@ dist/
 # Tooling caches
 .ruff_cache/
 .pytest_cache/
+
+# Local Claude Code worktrees / settings (never part of the plugin)
+.claude/

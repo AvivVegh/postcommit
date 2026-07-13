@@ -176,6 +176,28 @@ def is_ancestor(cwd, sha):
     return out.returncode == 0
 
 
+def parse_shortstat(text):
+    """Parse `git diff --shortstat` output into (files, insertions, deletions).
+
+    Returns zeros for empty or unrecognized input. Shared by the extractor and
+    the scorer so git's wording is tracked in exactly one place.
+    """
+    files = insertions = deletions = 0
+    for part in (text or "").split(","):
+        part = part.strip()
+        digits = "".join(ch for ch in part if ch.isdigit())
+        if not digits:
+            continue
+        n = int(digits)
+        if "file" in part:
+            files = n
+        elif "insertion" in part:
+            insertions = n
+        elif "deletion" in part:
+            deletions = n
+    return files, insertions, deletions
+
+
 # --- state verbs (backing the `postcommit state ...` CLI) -------------------
 
 
