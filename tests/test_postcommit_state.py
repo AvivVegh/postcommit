@@ -1,4 +1,4 @@
-"""Unit + CLI tests for hooks/postcommit_state.py — the shared state layer."""
+"""Unit + verb tests for postcommit.state — the shared state layer."""
 
 import contextlib
 import io
@@ -7,7 +7,8 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 
-from _support import init_repo, commit, state as st
+from _support import commit, init_repo
+from _support import state as st
 
 
 class TimeHelpers(unittest.TestCase):
@@ -33,6 +34,15 @@ class TimeHelpers(unittest.TestCase):
 
     def test_parse_iso_accepts_plain_offset(self):
         self.assertIsNotNone(st.parse_iso("2026-07-05T17:06:30+00:00"))
+
+    def test_parse_iso_naive_input_is_assumed_utc(self):
+        # A timestamp with no offset must return tz-aware (UTC); otherwise
+        # comparing it to an aware cutoff raises TypeError in the transcript
+        # loops, which are guarded only by `except OSError`.
+        dt = st.parse_iso("2026-07-05T10:00:00")
+        self.assertIsNotNone(dt)
+        self.assertIsNotNone(dt.tzinfo)
+        self.assertEqual(dt.utcoffset().total_seconds(), 0)
 
 
 class JsonIO(unittest.TestCase):
@@ -125,63 +135,63 @@ class GitHelpers(unittest.TestCase):
         self.assertIsNone(st.git(self.repo, "not-a-real-subcommand"))
 
 
-class Cli(unittest.TestCase):
-    """Drive the CLI verbs against a real fixture repo via cwd override."""
+class StateVerbs(unittest.TestCase):
+    """Drive the `postcommit state ...` verbs against a real fixture repo.
+
+    Each verb takes an explicit cwd, so no chdir is needed. Verbs print to
+    stdout; that output is exercised by test_cli.py, so here we ignore it and
+    assert on the on-disk state and return codes.
+    """
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.repo = init_repo(os.path.join(self.tmp.name, "repo"))
         self.head = commit(self.repo, "a.txt", "one\n", "first")
-        self._cwd = os.getcwd()
-        os.chdir(self.repo)
-        self.addCleanup(os.chdir, self._cwd)
-
-    @staticmethod
-    def main(argv):
-        # main() prints to stdout; swallow it so test output stays clean.
-        with contextlib.redirect_stdout(io.StringIO()), \
-                contextlib.redirect_stderr(io.StringIO()):
-            return st.main(argv)
+        # Verbs print to stdout/stderr; keep the test runner's output clean.
+        stack = contextlib.ExitStack()
+        stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+        stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+        self.addCleanup(stack.close)
 
     def _wm(self):
         return st.read_json(st.watermark_path(self.repo), {})
 
     def test_snooze_sets_future_until(self):
-        rc = self.main(["snooze", "2"])
-        self.assertEqual(rc, 0)
+        self.assertEqual(st.state_snooze(self.repo, "2"), 0)
         until = st.parse_iso(self._wm()["snooze_until"])
         self.assertGreater(until, st.now_utc())
 
+    def test_snooze_default_days(self):
+        self.assertEqual(st.state_snooze(self.repo, None), 0)
+        self.assertIsNotNone(self._wm()["snooze_until"])
+
     def test_snooze_rejects_bad_days(self):
-        self.assertEqual(self.main(["snooze", "abc"]), 2)
+        self.assertEqual(st.state_snooze(self.repo, "abc"), 2)
 
     def test_unsnooze_clears(self):
-        self.main(["snooze", "3"])
-        self.main(["unsnooze"])
+        st.state_snooze(self.repo, "3")
+        st.state_unsnooze(self.repo)
         self.assertIsNone(self._wm()["snooze_until"])
 
     def test_mark_posted_pins_head_and_drops_rec(self):
         st.write_json(st.recommendation_path(self.repo), {"verdict": "post-worthy"})
-        self.assertEqual(self.main(["mark-posted"]), 0)
+        self.assertEqual(st.state_mark_posted(self.repo), 0)
         self.assertEqual(self._wm()["last_posted_head"], self.head)
         self.assertIsNone(st.read_json(st.recommendation_path(self.repo), None))
 
     def test_stage_fake_writes_post_worthy_rec(self):
-        self.assertEqual(self.main(["stage-fake"]), 0)
+        self.assertEqual(st.state_stage_fake(self.repo), 0)
         rec = st.read_json(st.recommendation_path(self.repo), None)
         self.assertEqual(rec["verdict"], "post-worthy")
         self.assertEqual(rec["head"], self.head)
 
     def test_reset_removes_state(self):
-        self.main(["stage-fake"])
-        self.main(["snooze", "1"])
-        self.assertEqual(self.main(["reset"]), 0)
+        st.state_stage_fake(self.repo)
+        st.state_snooze(self.repo, "1")
+        self.assertEqual(st.state_reset(self.repo), 0)
         self.assertIsNone(st.read_json(st.recommendation_path(self.repo), None))
         self.assertIsNone(st.read_json(st.watermark_path(self.repo), None))
-
-    def test_unknown_command_returns_2(self):
-        self.assertEqual(self.main(["bogus"]), 2)
 
 
 if __name__ == "__main__":

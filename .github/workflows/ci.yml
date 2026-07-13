@@ -13,10 +13,10 @@ permissions:
   contents: read
 
 jobs:
-  # Automates the manual pre-flight in docs/smoke-test.md: manifests must parse,
-  # hook scripts must exist + be executable + compile, and the dev script must
-  # pass shellcheck. A broken manifest or hook syntax error ships straight to
-  # users, so this gates every PR to main.
+  # The required gate. Covers both surfaces now that the product is code-first:
+  # the plugin manifests/hooks AND the installable Python package. A broken
+  # manifest, a hook that won't compile, a lint failure, or a red test all ship
+  # straight to users, so this blocks every PR to main.
   validate:
     name: validate
     runs-on: ubuntu-latest
@@ -33,10 +33,24 @@ jobs:
             python3 -m json.tool "$f" >/dev/null && echo "ok  $f" || { echo "BAD $f"; exit 1; }
           done
 
+      - name: plugin.json and pyproject.toml versions agree
+        run: |
+          python3 - <<'PY'
+          import json, re, sys
+          pv = json.load(open(".claude-plugin/plugin.json"))["version"]
+          text = open("pyproject.toml").read()
+          m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+          if not m:
+              sys.exit("no version in pyproject.toml")
+          if m.group(1) != pv:
+              sys.exit("version mismatch: plugin.json %s != pyproject.toml %s" % (pv, m.group(1)))
+          print("ok: both at", pv)
+          PY
+
       - name: Hook scripts referenced in hooks.json exist and are executable
         run: |
           python3 - <<'PY'
-          import json, os, re, sys
+          import json, os, sys
 
           with open("hooks/hooks.json") as fh:
               cfg = json.load(fh)
@@ -70,20 +84,53 @@ jobs:
           sys.exit(1 if failed else 0)
           PY
 
-      - name: Byte-compile hook scripts
-        run: python3 -m py_compile hooks/session-end.py hooks/session-start.py hooks/postcommit_state.py
+      - name: Byte-compile hooks and package
+        run: |
+          python3 -m py_compile hooks/session-end.py hooks/session-start.py hooks/_adapter.py
+          python3 -m compileall -q postcommit
+
+      - name: Install the package
+        run: python3 -m pip install --upgrade pip && python3 -m pip install .
+
+      - name: CLI smoke test
+        run: |
+          postcommit --version
+          postcommit extract --help >/dev/null
+          echo '{}' | postcommit hook session-end   # must exit 0 on empty payload
+
+      - name: Lint (ruff)
+        run: python3 -m pip install ruff && ruff check postcommit tests hooks
 
       - name: Unit tests
-        # stdlib unittest only — no deps to install. Fixtures shell out to git,
-        # which is preinstalled on ubuntu-latest.
+        # stdlib unittest only — no test deps to install. Fixtures shell out to
+        # git, which is preinstalled on ubuntu-latest.
         run: python3 -m unittest discover -s tests -p 'test_*.py' -v
 
       - name: Shellcheck dev scripts
         run: shellcheck scripts/link-local.sh scripts/run-tests.sh
 
-  # Non-blocking security lint of the hook scripts. continue-on-error keeps it
-  # advisory during initial adoption; drop that flag after a cleanup pass so it
-  # gates like the other checks.
+  # Prove the dependency-free core installs and tests green across the supported
+  # Python range, not just the validate job's 3.12.
+  test-matrix:
+    name: test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install the package
+        run: python3 -m pip install .
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+
+  # Non-blocking security lint of the executable code. continue-on-error keeps
+  # it advisory during initial adoption; drop the flag after a cleanup pass so
+  # it gates like the other checks.
   security-scan:
     name: security-scan
     runs-on: ubuntu-latest
@@ -98,12 +145,12 @@ jobs:
       - name: Install bandit
         run: python3 -m pip install --upgrade bandit
 
-      - name: Scan hooks
-        run: python3 -m bandit -r hooks -ll
+      - name: Scan package and hooks
+        run: python3 -m bandit -r postcommit hooks -ll
 
   # Guards the "explicit version must be bumped every release or users never
-  # update" footgun from the plugin spec: on a published release, the git tag
-  # must equal plugin.json's version.
+  # update" footgun: on a published release, the git tag must equal the version
+  # in both plugin.json and pyproject.toml (validate already checks those agree).
   version-guard:
     name: version-guard
     if: github.event_name == 'release'

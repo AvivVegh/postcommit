@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "postcommit"
+version = "0.2.0"
+description = "Turn real dev work — git history plus Claude Code session transcripts — into candidate LinkedIn posts. Local-only, dependency-free core."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Aviv Vegh" }]
+keywords = ["linkedin", "content", "git", "writing", "developer-marketing"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Environment :: Console",
+    "Topic :: Utilities",
+]
+# The core is deliberately dependency-free (stdlib only) to keep the privacy and
+# "runs anywhere" guarantees. Optional extras add capabilities that pull deps.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/AvivVegh/postcommit"
+Repository = "https://github.com/AvivVegh/postcommit"
+
+[project.optional-dependencies]
+# The MCP server (postcommit-mcp) needs the reference MCP SDK, which requires
+# Python >=3.10. Gated with a marker so the dependency-free core still installs
+# on 3.9; on 3.9 the extra resolves to nothing and postcommit-mcp prints an
+# install hint instead of running.
+mcp = ["mcp>=1.2; python_version >= '3.10'"]
+dev = ["ruff>=0.6", "pyright>=1.1.380", "bandit>=1.7"]
+
+[project.scripts]
+postcommit = "postcommit.__main__:main"
+postcommit-mcp = "postcommit.serve:main"
+
+[tool.setuptools.packages.find]
+include = ["postcommit*"]
+
+[tool.setuptools.package-data]
+postcommit = ["data/*.md"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+# E/F (pyflakes+pycodestyle), I (isort), B (bugbear). UP (pyupgrade) is left
+# off on purpose: the package uses %-formatting throughout, matching the code it
+# was ported from — consistency beats a mechanical f-string migration.
+select = ["E", "F", "I", "B"]
+ignore = ["E501"]  # line length is enforced by the formatter, not the linter
+
+[tool.pyright]
+include = ["postcommit"]
+pythonVersion = "3.9"
+typeCheckingMode = "basic"
+
+[tool.bandit]
+# The core shells out to git with fixed argv lists (never shell=True) and reads
+# only local files. B404/B603 (subprocess) are expected and reviewed.
+skips = ["B404", "B603"]

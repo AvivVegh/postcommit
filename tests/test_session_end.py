@@ -1,5 +1,5 @@
-"""Tests for hooks/session-end.py — scoring, transcript parsing, and the
-end-to-end recommendation staging."""
+"""Tests for the SessionEnd path — scoring, transcript parsing (postcommit.scoring),
+and the end-to-end recommendation staging through the thin hook shim."""
 
 import json
 import os
@@ -7,8 +7,18 @@ import tempfile
 import unittest
 
 from _support import (
-    init_repo, commit, write_transcript, user_msg, edit_msg, run_hook,
-    session_end as se, state as st,
+    commit,
+    edit_msg,
+    init_repo,
+    run_hook,
+    user_msg,
+    write_transcript,
+)
+from _support import (
+    scoring as se,
+)
+from _support import (
+    state as st,
 )
 
 
@@ -142,6 +152,39 @@ class ParseTranscript(unittest.TestCase):
         path = self._write([edit_msg("Read"), edit_msg("Bash"), edit_msg("Grep")])
         self.assertEqual(se.parse_transcript(path)["n_edits"], 0)
 
+    def test_sidechain_records_ignored(self):
+        # Sub-agent (sidechain) prompts/edits must not inflate the score — the
+        # bundle narrative excludes them, so scoring has to as well.
+        path = self._write([
+            user_msg("real prompt with a bug", ts="2026-07-05T10:00:00Z"),
+            {"isSidechain": True, "type": "assistant",
+             "message": {"content": [
+                 {"type": "tool_use", "name": "Edit", "input": {}}]},
+             "timestamp": "2026-07-05T10:01:00Z"},
+            {"isSidechain": True, "type": "user",
+             "message": {"content": "subagent chatter"},
+             "timestamp": "2026-07-05T10:02:00Z"},
+        ])
+        sig = se.parse_transcript(path)
+        self.assertEqual(sig["n_user_prompts"], 1)  # sidechain user not counted
+        self.assertEqual(sig["n_edits"], 0)         # sidechain edit not counted
+
+
+class GitSignalsFallback(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = init_repo(os.path.join(self.tmp.name, "repo"))
+
+    def test_committed_churn_counted_without_last_posted_head(self):
+        # A clean-tree day with one sizable commit and no prior post. The
+        # fallback must measure the *committed* churn — `git diff` ignores
+        # `--since`, so the old code saw the (empty) worktree and scored zero.
+        commit(self.repo, "big.py", "x = 1\n" * 200, "feat: big day")
+        sig = se.git_signals(self.repo, None)
+        self.assertEqual(sig["n_commits"], 1)
+        self.assertGreaterEqual(sig["insertions"], 200)
+
     def test_malformed_lines_skipped(self):
         path = os.path.join(self.tmp.name, "s.jsonl")
         with open(path, "w", encoding="utf-8") as fh:
@@ -176,11 +219,11 @@ class FreshDraft(unittest.TestCase):
 
 class SummaryLine(unittest.TestCase):
     def test_pluralization_and_join(self):
-        line = se._summary_line(git_sig(n_commits=2, files=1), tx_sig(duration_min=15))
+        line = se.summary_line(git_sig(n_commits=2, files=1), tx_sig(duration_min=15))
         self.assertEqual(line, "2 commits, 1 file touched, ~15 min")
 
     def test_fallback_when_empty(self):
-        self.assertEqual(se._summary_line(git_sig(), tx_sig()), "recent work")
+        self.assertEqual(se.summary_line(git_sig(), tx_sig()), "recent work")
 
 
 class EndToEnd(unittest.TestCase):

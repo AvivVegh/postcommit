@@ -1,28 +1,16 @@
-#!/usr/bin/env python3
-"""postcommit_state — shared state for the Phase 1 habit-loop hooks.
+"""postcommit.state — local-only state for the habit-loop hooks.
 
-Everything here is local-only and dependency-free (stdlib). Two hooks share it:
+Dependency-free (stdlib). Shared by the SessionEnd / SessionStart hook logic and
+exposed through the `postcommit state ...` CLI verbs. Also the home for the
+small time and git helpers the rest of the package builds on.
 
-  session-end.py   stages a recommendation + advances the watermark
-  session-start.py reads the recommendation and (maybe) nudges
-
-State lives in two places:
+State lives in three places:
 
   <repo>/.postcommit/state/recommendation.json   per-repo staged nudge
   <repo>/.postcommit/state/watermark.json        per-repo "what's processed/posted"
   ~/.postcommit/nudge-state.json                 global once-per-day cooldown
 
-The `.postcommit/` dir is already gitignored, so per-repo state never leaks.
-
-This file is also a tiny CLI (see `main`) so the /post-snooze command and manual
-tests have a stable entrypoint:
-
-  postcommit-state show            # dump all state for cwd
-  postcommit-state snooze [DAYS]   # hush nudges for DAYS (default 3)
-  postcommit-state unsnooze        # clear a snooze
-  postcommit-state mark-posted     # pin current HEAD as posted, drop the rec
-  postcommit-state stage-fake      # stage a fake post-worthy rec (testing)
-  postcommit-state reset           # wipe per-repo state (testing)
+The `.postcommit/` dir is gitignored, so per-repo state never leaks.
 """
 
 import json
@@ -45,13 +33,22 @@ def iso(dt):
 
 
 def parse_iso(s):
-    """Parse an ISO timestamp (with or without trailing Z). None on failure."""
+    """Parse an ISO timestamp (with or without trailing Z). None on failure.
+
+    Always returns a timezone-aware datetime: a value that parses without an
+    offset is assumed UTC. This keeps every downstream comparison/subtraction
+    tz-safe — mixing a naive and an aware datetime raises TypeError, which the
+    transcript loops (guarded only by `except OSError`) would not catch.
+    """
     if not s:
         return None
     try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def today_local():
@@ -87,7 +84,7 @@ def nudge_state_path():
 
 def read_json(path, default):
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             return json.load(fh)
     except (FileNotFoundError, ValueError, OSError):
         return default
@@ -179,10 +176,10 @@ def is_ancestor(cwd, sha):
     return out.returncode == 0
 
 
-# --- CLI --------------------------------------------------------------------
+# --- state verbs (backing the `postcommit state ...` CLI) -------------------
 
 
-def cmd_show(cwd):
+def state_show(cwd):
     print("repo:", cwd)
     print("head:", git_head(cwd))
     print("\nwatermark:")
@@ -191,15 +188,16 @@ def cmd_show(cwd):
     print(json.dumps(read_json(recommendation_path(cwd), None), indent=2, sort_keys=True))
     print("\nglobal nudge-state:")
     print(json.dumps(read_json(nudge_state_path(), None), indent=2, sort_keys=True))
+    return 0
 
 
-def cmd_snooze(cwd, argv):
+def state_snooze(cwd, days_arg=None):
     days = 3
-    if argv:
+    if days_arg is not None:
         try:
-            days = max(1, int(argv[0]))
-        except ValueError:
-            print("usage: postcommit-state snooze [DAYS]", file=sys.stderr)
+            days = max(1, int(days_arg))
+        except (ValueError, TypeError):
+            print("usage: postcommit state snooze [DAYS]", file=sys.stderr)
             return 2
     wm = read_watermark(cwd)
     until = now_utc() + timedelta(days=days)
@@ -209,7 +207,7 @@ def cmd_snooze(cwd, argv):
     return 0
 
 
-def cmd_unsnooze(cwd):
+def state_unsnooze(cwd):
     wm = read_watermark(cwd)
     wm["snooze_until"] = None
     write_watermark(cwd, wm)
@@ -217,7 +215,7 @@ def cmd_unsnooze(cwd):
     return 0
 
 
-def cmd_mark_posted(cwd):
+def state_mark_posted(cwd):
     wm = read_watermark(cwd)
     head = git_head(cwd)
     wm["last_posted_head"] = head
@@ -232,7 +230,7 @@ def cmd_mark_posted(cwd):
     return 0
 
 
-def cmd_stage_fake(cwd):
+def state_stage_fake(cwd):
     rec = {
         "created_at": iso(now_utc()),
         "session_id": "fake-session",
@@ -251,7 +249,7 @@ def cmd_stage_fake(cwd):
     return 0
 
 
-def cmd_reset(cwd):
+def state_reset(cwd):
     for p in (recommendation_path(cwd), watermark_path(cwd)):
         try:
             os.remove(p)
@@ -259,31 +257,3 @@ def cmd_reset(cwd):
         except FileNotFoundError:
             pass
     return 0
-
-
-def main(argv):
-    cwd = os.getcwd()
-    if not argv:
-        cmd_show(cwd)
-        return 0
-    cmd, rest = argv[0], argv[1:]
-    if cmd == "show":
-        cmd_show(cwd)
-        return 0
-    if cmd == "snooze":
-        return cmd_snooze(cwd, rest)
-    if cmd == "unsnooze":
-        return cmd_unsnooze(cwd)
-    if cmd == "mark-posted":
-        return cmd_mark_posted(cwd)
-    if cmd == "stage-fake":
-        return cmd_stage_fake(cwd)
-    if cmd == "reset":
-        return cmd_reset(cwd)
-    print("unknown command: %s" % cmd, file=sys.stderr)
-    print(__doc__, file=sys.stderr)
-    return 2
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))

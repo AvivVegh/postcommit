@@ -1,12 +1,15 @@
-"""Tests for hooks/session-start.py — the nudge builder and the five gates
-that decide whether a SessionStart nudge fires."""
+"""Tests for the SessionStart path (postcommit.hooks) — the nudge builder and
+the five gates that decide whether a SessionStart nudge fires, driven end-to-end
+through the thin hook shim."""
 
 import json
 import os
 import tempfile
 import unittest
 
-from _support import run_hook, session_start as ss, state as st
+from _support import run_hook
+from _support import session_start as ss
+from _support import state as st
 
 
 class BuildNudge(unittest.TestCase):
