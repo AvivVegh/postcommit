@@ -136,7 +136,7 @@ def gather_git(cwd, win):
     commit_lines = [ln for ln in commits.splitlines() if ln.strip()]
 
     shortstat = st.git(cwd, "diff", "--shortstat", win["diff_range"]) or ""
-    files, ins, dels = _shortstat_nums(shortstat)
+    files, ins, dels = st.parse_shortstat(shortstat)
 
     raw_diff = st.git(cwd, "diff", win["diff_range"]) or ""
     diff = cap_diff(mask_secrets(raw_diff))
@@ -155,23 +155,6 @@ def gather_git(cwd, win):
         "diff": diff,
         "has_uncommitted": bool(status or unstaged or staged),
     }
-
-
-def _shortstat_nums(text):
-    files = ins = dels = 0
-    for part in (text or "").split(","):
-        part = part.strip()
-        digits = "".join(ch for ch in part if ch.isdigit())
-        if not digits:
-            continue
-        n = int(digits)
-        if "file" in part:
-            files = n
-        elif "insertion" in part:
-            ins = n
-        elif "deletion" in part:
-            dels = n
-    return files, ins, dels
 
 
 # --- diff hygiene: secret masking + size cap -------------------------------

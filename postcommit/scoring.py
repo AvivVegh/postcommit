@@ -156,33 +156,16 @@ def git_signals(cwd, last_posted_head):
 
 
 def _parse_shortstat(text, sig):
-    """`N files changed, N insertions(+), N deletions(-)` -> fill sig (replace)."""
-    files = ins = dels = 0
-    if text:
-        for part in text.split(","):
-            part = part.strip()
-            n = "".join(ch for ch in part if ch.isdigit())
-            if not n:
-                continue
-            n = int(n)
-            if "file" in part:
-                files = n
-            elif "insertion" in part:
-                ins = n
-            elif "deletion" in part:
-                dels = n
-    sig["files"] = files
-    sig["insertions"] = ins
-    sig["deletions"] = dels
+    """Fill sig's file/insertion/deletion counts from `git diff --shortstat`."""
+    sig["files"], sig["insertions"], sig["deletions"] = st.parse_shortstat(text)
 
 
 def _parse_shortstat_add(text, sig):
     """Same, but add onto existing counts (for staged + unstaged)."""
-    tmp = {"files": 0, "insertions": 0, "deletions": 0}
-    _parse_shortstat(text, tmp)
-    sig["files"] += tmp["files"]
-    sig["insertions"] += tmp["insertions"]
-    sig["deletions"] += tmp["deletions"]
+    files, ins, dels = st.parse_shortstat(text)
+    sig["files"] += files
+    sig["insertions"] += ins
+    sig["deletions"] += dels
 
 
 # --- scoring ----------------------------------------------------------------
