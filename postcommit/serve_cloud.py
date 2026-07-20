@@ -28,6 +28,11 @@ INSTALL_HINT = (
     "  # or: pip install 'postcommit[cloud]'"
 )
 
+# The unambiguous next step for an auth failure. A stdio MCP server gets no
+# client-driven OAuth prompt, so this hands the calling model an explicit command
+# to run (or offer to the user) instead of a bare "not authenticated".
+AUTH_ACTION = "run: postcommit-cloud-mcp login"
+
 
 def _run(fn):
     """Call a CloudClient method, returning JSON text for the MCP tool result.
@@ -41,7 +46,8 @@ def _run(fn):
     try:
         result = fn(CloudClient())
     except AuthError as exc:
-        return json.dumps({"error": "auth", "message": str(exc)})
+        return json.dumps({
+            "error": "auth", "action": AUTH_ACTION, "message": str(exc)})
     except CloudApiError as exc:
         return json.dumps({"error": "api", "status": exc.status, "message": exc.message})
     return json.dumps({"ok": True, "result": result}, indent=2)

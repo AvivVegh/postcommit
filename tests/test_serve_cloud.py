@@ -108,7 +108,11 @@ class RunHelper(unittest.TestCase):
             raise AuthError("not authenticated")
 
         out = serve_cloud._run(raiser)
-        self.assertEqual(json.loads(out), {"error": "auth", "message": "not authenticated"})
+        self.assertEqual(json.loads(out), {
+            "error": "auth",
+            "action": "run: postcommit-cloud-mcp login",
+            "message": "not authenticated",
+        })
 
     def test_api_error_carries_status_and_message(self):
         from postcommit.cloud_client import CloudApiError
