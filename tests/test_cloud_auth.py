@@ -75,7 +75,10 @@ class CachedTokenPath(CloudAuthBase):
         provider = cloud_auth.CredentialProvider(self.creds)
         with self.assertRaises(cloud_auth.AuthError) as cm:
             provider.get_id_token()
-        self.assertIn("POSTCOMMIT_CLOUD_TOKEN", str(cm.exception))
+        msg = str(cm.exception)
+        self.assertIn("POSTCOMMIT_CLOUD_TOKEN", msg)
+        # The hint must name the exact command a user runs to authenticate.
+        self.assertIn("postcommit-cloud-mcp login", msg)
 
 
 class RefreshPath(CloudAuthBase):
