@@ -30,9 +30,9 @@ SECURETOKEN_URL = "https://securetoken.googleapis.com/v1/token"
 _EXPIRY_SKEW_SECONDS = 60
 
 _LOGIN_HINT = (
-    "not authenticated with postcommit-cloud. Either set POSTCOMMIT_CLOUD_TOKEN "
-    "to a Firebase id_token, or run the login flow (Ticket B) to populate "
-    "~/.postcommit/credentials.json."
+    "not authenticated with postcommit-cloud. Run `postcommit-cloud-mcp login` "
+    "to sign in via your browser, or set POSTCOMMIT_CLOUD_TOKEN to a Firebase "
+    "id_token. Either populates ~/.postcommit/credentials.json."
 )
 
 
@@ -61,7 +61,9 @@ class CredentialProvider:
             return cached
 
         refresh_token = creds.get("refresh_token")
-        api_key = cloud_config.firebase_api_key()
+        # The env var wins when set; otherwise fall back to the api_key the login
+        # flow stored in credentials.json, so refresh works with zero env config.
+        api_key = cloud_config.firebase_api_key() or creds.get("api_key")
         if refresh_token and api_key:
             return self._refresh(refresh_token, api_key, creds)
 

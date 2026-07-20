@@ -13,6 +13,10 @@ Env vars:
                              id_token against Google's securetoken endpoint.
   POSTCOMMIT_CLOUD_TOKEN     a pasted Firebase id_token (v0 auth). When set it is
                              used verbatim and no refresh is attempted.
+  POSTCOMMIT_DASHBOARD_URL   base URL of the postcommit-cloud dashboard, whose
+                             /cli-auth page completes the loopback login. Optional;
+                             defaults to the production dashboard. Point this at a
+                             local dashboard (e.g. http://localhost:3000) for dev.
 
 The core stays stdlib-only; only serve_cloud.py imports the MCP SDK.
 """
@@ -23,6 +27,11 @@ import os
 # local development (the ticket ships prod-default, local-for-testing).
 # TODO(cloud): confirm the final prod gateway / custom domain before release.
 DEFAULT_API_URL = "https://api.postcommit.app"
+
+# Production dashboard base URL, whose /cli-auth page hands tokens back to the
+# CLI loopback server during `postcommit-cloud-mcp login`. Override with
+# POSTCOMMIT_DASHBOARD_URL for local development.
+DEFAULT_DASHBOARD_URL = "https://platfrom.postcommit.dev"
 
 
 class ConfigError(Exception):
@@ -46,3 +55,12 @@ def cloud_token():
 def firebase_api_key():
     """The Firebase Web API key used for token refresh, or None."""
     return os.environ.get("POSTCOMMIT_FIREBASE_API_KEY", "").strip() or None
+
+
+def dashboard_url():
+    """Base URL for the cloud dashboard, without a trailing slash.
+
+    Falls back to the production dashboard when POSTCOMMIT_DASHBOARD_URL is unset.
+    """
+    url = os.environ.get("POSTCOMMIT_DASHBOARD_URL", "").strip() or DEFAULT_DASHBOARD_URL
+    return url.rstrip("/")
