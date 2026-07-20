@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "postcommit"
-version = "0.2.0"
+version = "0.3.0"
 description = "Turn real dev work — git history plus Claude Code session transcripts — into candidate LinkedIn posts. Local-only, dependency-free core."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -31,11 +31,16 @@ Repository = "https://github.com/AvivVegh/postcommit"
 # on 3.9; on 3.9 the extra resolves to nothing and postcommit-mcp prints an
 # install hint instead of running.
 mcp = ["mcp>=1.2; python_version >= '3.10'"]
+# The cloud MCP server (postcommit-cloud-mcp) is a *separate*, network-touching
+# server; it needs the same MCP SDK as [mcp] (Python >=3.10). The core stays
+# stdlib-only — the cloud REST client/auth are stdlib and install without this.
+cloud = ["mcp>=1.2; python_version >= '3.10'"]
 dev = ["ruff>=0.6", "pyright>=1.1.380", "bandit>=1.7"]
 
 [project.scripts]
 postcommit = "postcommit.__main__:main"
 postcommit-mcp = "postcommit.serve:main"
+postcommit-cloud-mcp = "postcommit.serve_cloud:main"
 
 [tool.setuptools.packages.find]
 include = ["postcommit*"]

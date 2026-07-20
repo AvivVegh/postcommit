@@ -1,7 +1,7 @@
 {
   "name": "postcommit",
   "description": "Turn real dev work — git history plus Claude Code session transcripts — into candidate LinkedIn posts. Local-only, manually triggered via /post.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": {
     "name": "Aviv Vegh"
   },
