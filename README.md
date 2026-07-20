@@ -1,194 +1,220 @@
 # postcommit
 
-A Claude Code plugin that turns real dev work — git history + Claude Code session transcripts — into candidate LinkedIn posts.
+**Turn the work you already did into a LinkedIn post — without leaving your editor.**
 
-Local-only. Manually triggered. Nothing leaves your machine.
+postcommit is a [Claude Code](https://claude.com/claude-code) plugin that reads your
+real dev work — git history plus your Claude Code session transcript — and drafts
+candidate LinkedIn posts about it. You trigger it with `/post`, review the drafts, and
+post the one you like. Nothing is auto-published.
 
-## Phase 0 status: proving the wedge
+- 🔒 **Local-only.** Extraction and drafting run entirely on your machine. No transcripts, diffs, or drafts leave it.
+- ✍️ **Grounded in real work.** Drafts are built from your actual commits and session — the writer never invents numbers, errors, or file names.
+- ⚡ **Manual and low-friction.** One command, three drafts, saved to disk. Optional ambient nudges when a session looks post-worthy.
 
-The whole point of this build is one experiment: **does feeding the tool the real work (git diff + session transcript) produce a LinkedIn post that's meaningfully better than just asking Claude, in the same session, "write a post about what we just did"?**
+---
 
-If yes, there's a product. If a 30-second DIY ask gets ~90% of the way there, there isn't. So Phase 0 is deliberately the least possible thing.
+## The idea
 
-## What's in the box
+Most "AI writes your LinkedIn post" tools start from a blank prompt and produce generic
+slop. postcommit starts from what you actually did today — the diff, the debugging
+detour, the tiny tool you built — and turns that specificity into a draft worth posting.
 
-postcommit is now **code-first**: an installable Python package does the real work,
-and the Claude Code plugin (command / skill / agent / hooks) is a thin adapter that
-shells out to the installed `postcommit` CLI.
+The design bet is simple and testable: **feeding the tool the real work should produce a
+post meaningfully better than just asking Claude, in the same session, "write a post
+about what we just did."** If it doesn't, there's no product. That honesty test (see
+[Is it actually better?](#is-it-actually-better)) is the north star, not feature breadth.
 
-```
-pyproject.toml                      # installable package (uv/pip); entry points below
-uv.lock                             # pinned resolution
-postcommit/                         # the package — all the real logic
-  __main__.py                       #   `postcommit` CLI: extract, state, hook, install
-  extract.py                        #   deterministic git + session-transcript → work bundle
-  scoring.py                        #   post-worthiness signals + scoring
-  state.py                          #   per-repo/global state (watermark, snooze, rec)
-  hooks.py                          #   SessionEnd / SessionStart logic
-  serve.py                          #   `postcommit-mcp` MCP server (optional extra) — local only
-  cloud_config.py                   #   cloud-client config from env (stdlib)
-  cloud_auth.py                     #   CredentialProvider seam: id_token + refresh (stdlib)
-  cloud_client.py                   #   thin REST client for postcommit-cloud (stdlib urllib)
-  serve_cloud.py                    #   `postcommit-cloud-mcp` MCP server (optional [cloud] extra)
-  install.py                        #   write the skill adapter into a host (~/.claude)
-  data/skill.md                     #   the thin skill adapter, shipped as package data
-.claude-plugin/plugin.json          # plugin manifest (name, version, metadata)
-.claude-plugin/marketplace.json     # self-hosted marketplace listing
-commands/post.md                    # /post <window> — the manual trigger
-commands/post-snooze.md             # /post-snooze [days] — hush the nudge
-skills/postcommit-extract/SKILL.md  # thin skill adapter (runs `postcommit extract`)
-agents/post-writer.md               # the crown-jewels prompt (LinkedIn taste)
-hooks/hooks.json                    # declares the two hooks (auto-registered on install)
-hooks/session-end.py                # thin shim → `postcommit hook session-end`
-hooks/session-start.py              # thin shim → `postcommit hook session-start`
-hooks/_adapter.py                   # shared forwarding logic for the two shims
-tests/                              # stdlib unittest suite for the package
-scripts/link-local.sh               # dev-only: uv-install editable + symlink + hooks
-```
-
-**Entry points:** `postcommit` (the CLI), `postcommit-mcp` (the local-only MCP
-server, needs the `[mcp]` extra), and `postcommit-cloud-mcp` (the cloud MCP client,
-needs the `[cloud]` extra — see below).
-
-### Cloud MCP client (`postcommit-cloud-mcp`)
-
-A **separate** MCP server that exposes six thin tools passing through to the
-postcommit-cloud REST API — so drafts can be created/scheduled/published from any
-MCP host. It is deliberately split from the local-only `postcommit-mcp`: the free
-plugin's "nothing leaves the machine" guarantee stays intact because this server
-lives behind its own `[cloud]` extra and is the *only* piece that touches the network.
+## How it works
 
 ```
-uv tool install 'postcommit[cloud]'
+/post <window>
+   → extract      deterministic: git state + session transcript → a "work bundle"
+                  (masks secrets, caps the diff, skips sidechains — all local)
+   → post-writer  a Claude subagent turns the bundle into 3 candidate drafts
+   → save         drafts land in .postcommit/drafts/<UTC-ISO>.md and open in your editor
 ```
 
-Tools: `create_post`, `list_posts`, `update_post`, `delete_post`,
-`linkedin_status`, `linkedin_disconnect`.
-
-Configuration (env vars):
-
-- `POSTCOMMIT_CLOUD_API_URL` — REST API base URL. Optional; defaults to the
-  production gateway. Point it at a local backend for dev
-  (`export POSTCOMMIT_CLOUD_API_URL=http://localhost:8080`).
-- `POSTCOMMIT_CLOUD_TOKEN` — a pasted Firebase id_token. **This is the v0 auth
-  path** and the fastest way to try the tools today.
-- `POSTCOMMIT_FIREBASE_API_KEY` — used only to refresh an id_token from a cached
-  refresh token in `~/.postcommit/credentials.json`.
-
-> **Auth is a stub until the login flow ships.** The `CredentialProvider` seam in
-> `cloud_auth.py` already resolves a token from the env, or from a refresh token in
-> `~/.postcommit/credentials.json`. A future ticket adds the interactive login that
-> *populates* that file; until then, set `POSTCOMMIT_CLOUD_TOKEN` by hand.
+Two layers keep it honest: **deterministic code** (an installable Python package does
+the extraction, scoring, and state) and a **prompt/taste layer** (the post-writer
+subagent that actually writes). The command, skill, and hooks are thin glue between them.
 
 ## Install
 
-**Two pieces:** the Python package (does the work) and the Claude Code plugin (wires
-`/post`, the skill, and the hooks into Claude Code, all of which call the package).
+Two pieces: the Python package (does the work) and the Claude Code plugin (wires `/post`
+and the hooks into Claude Code — both call the package).
 
-1. Install the CLI:
+**1. Install the CLI:**
 
-   ```
-   uv tool install postcommit
-   # or: pip install postcommit  /  pipx install postcommit
-   # MCP server too:  uv tool install 'postcommit[mcp]'
-   ```
+```sh
+uv tool install postcommit
+# or:  pipx install postcommit  /  pip install postcommit
+```
 
-   The core is dependency-free. `postcommit --version` should now work on your PATH.
+The core is dependency-free stdlib, so it installs anywhere. `postcommit --version`
+should now work on your PATH.
 
-2. Install the Claude Code plugin. This repo is its own plugin marketplace:
-
-   ```
-   /plugin marketplace add AvivVegh/postcommit
-   /plugin install postcommit
-   ```
-
-   This registers the `/post` and `/post-snooze` commands, the extract skill, the
-   post-writer subagent, and the two hooks (via `hooks/hooks.json`). Those adapters
-   shell out to the `postcommit` CLI from step 1. Uninstalling removes all of them —
-   including the hooks — automatically. No manual `settings.json` editing.
-
-To update later: `uv tool upgrade postcommit` for the CLI, and
-`/plugin update postcommit` for the plugin (picks up a new `version` in the manifest).
-
-## Install (local, for iteration)
-
-For hacking on postcommit itself without publishing:
+**2. Install the plugin.** This repo is its own plugin marketplace:
 
 ```
-scripts/link-local.sh          # uv-install editable + symlink command/skill/agent + register hooks
+/plugin marketplace add AvivVegh/postcommit
+/plugin install postcommit
+```
+
+That registers the `/post` and `/post-snooze` commands, the extract skill, the
+post-writer subagent, and the two hooks. Uninstalling removes all of them automatically
+— no manual `settings.json` editing.
+
+To update later: `uv tool upgrade postcommit` for the CLI, `/plugin update postcommit`
+for the plugin.
+
+## Usage
+
+Do real work in a repo with Claude Code, then:
+
+```
+/post 1d
+```
+
+The window argument accepts:
+
+| Form | Example | Meaning |
+|------|---------|---------|
+| Duration | `1d`, `4h`, `30m` | Work in the last N days/hours/minutes |
+| Keyword | `today` | Since midnight local time |
+| Git range | `HEAD~3..HEAD`, `main..HEAD` | A commit range |
+| Date | `since=2026-07-01` | Since a calendar date |
+
+You get three drafts in three fixed angles — a **debugging story**, a **counterintuitive
+lesson**, and a **tiny tool share** — saved to `.postcommit/drafts/<UTC-ISO>.md` and
+opened in your editor. The angles are fixed on purpose so you can compare output
+apples-to-apples over time.
+
+### Is it actually better?
+
+The built-in honesty check:
+
+1. Run `/post 1d` after real work.
+2. In the **same** session, also ask: *"Write a LinkedIn post about what we just did."* — the DIY baseline.
+3. Compare. Is the tool's draft clearly better? Would you post it? Would you post the DIY one?
+
+If the tool clearly wins, it's earning its keep. If they're a tie, the specificity isn't
+paying off yet.
+
+## The habit loop (hooks)
+
+So you don't have to remember `/post`, two Claude Code hooks make the recommendation
+ambient — both instant, deterministic, and local (no model calls):
+
+- **`SessionEnd`** cheaply scores whether the session was post-worthy (commits/churn since your last post + transcript signals like real prompts, edits, duration, debugging keywords). If it clears the bar, it stages a lightweight recommendation. If you already ran `/post` this session, it just advances the watermark instead.
+- **`SessionStart`** surfaces that recommendation as a one-line nudge — but only if there's unposted post-worthy work, at most once per day, and never while snoozed.
+
+Controlling nudges:
+
+- `/post` acts on the recommendation and clears it.
+- `/post-snooze [days]` hushes nudges for this repo (default 3 days).
+- `postcommit state show` inspects all state; `snooze` / `unsnooze` / `mark-posted` / `reset` are also available as `postcommit state <verb>`.
+
+## Cloud (optional): schedule & publish to LinkedIn
+
+Everything above is free and local. postcommit also ships a **separate**, opt-in cloud
+MCP server, `postcommit-cloud-mcp`, that passes *already-approved draft text* to the
+hosted postcommit-cloud API so drafts can be created, scheduled, and published to
+LinkedIn from any MCP host. It's deliberately split from the local tooling — the
+local "nothing leaves the machine" guarantee holds because this is the only piece that
+touches the network, and only ever with approved draft text.
+
+```sh
+uv tool install 'postcommit[cloud]'
+postcommit-cloud-mcp login     # opens your browser, stores a token in ~/.postcommit/credentials.json
+```
+
+`login` runs a local loopback handoff: it opens the postcommit-cloud dashboard, waits
+for the browser to hand a token back to a one-shot `127.0.0.1` server, and writes it
+(chmod 600) to `~/.postcommit/credentials.json`. `postcommit-cloud-mcp logout` deletes
+that file. Tokens are refreshed automatically from there — no env vars required for
+normal use.
+
+**Tools:** `create_post`, `list_posts`, `update_post`, `delete_post`, `linkedin_status`,
+`linkedin_disconnect`.
+
+**Optional configuration (env vars):**
+
+- `POSTCOMMIT_CLOUD_API_URL` — REST API base URL. Defaults to the production gateway; point it at a local backend for dev.
+- `POSTCOMMIT_DASHBOARD_URL` — dashboard base URL whose `/cli-auth` page completes the loopback login. Defaults to the production dashboard.
+- `POSTCOMMIT_CLOUD_TOKEN` — paste a Firebase id_token directly instead of running `login` (handy for CI/scripting).
+- `POSTCOMMIT_FIREBASE_API_KEY` — only needed to refresh a token when it's not already stored by `login`.
+
+## Privacy
+
+Privacy is a design constraint, not a setting:
+
+- The **extraction and drafting path never touches the network.** The core package is stdlib-only.
+- Extraction **masks secrets**, caps the diff (~40k chars), keeps ≤10 lines per code snippet, and skips `isSidechain` transcript records.
+- The **only** networked component is the optional `postcommit-cloud-mcp` server, and it sends **approved draft text only** — never raw code or transcripts.
+
+## Development
+
+Contributions welcome. To hack on postcommit locally without publishing:
+
+```sh
+scripts/link-local.sh          # editable install + symlink command/skill/agent + register hooks
 scripts/link-local.sh --unlink # undo
 ```
 
-This installs the package as an **editable** `uv` tool (so `postcommit` tracks your
-checkout — edit `postcommit/*.py` and the CLI picks it up immediately), symlinks the
-command/skill/subagent into `~/.claude/`, and registers the thin hooks. Requires `uv`
-(or install the package yourself with `pip install -e .`). Idempotent; won't overwrite
-non-symlink files. Restart Claude Code once after linking. Use this **or** the plugin
-install above, not both at once — they register the same hooks two different ways.
+This installs the package as an editable `uv` tool (so `postcommit` tracks your
+checkout), symlinks the command/skill/subagent into `~/.claude/`, and registers the
+hooks. Idempotent; won't overwrite non-symlink files. Restart Claude Code once after
+linking. Use this **or** the published plugin, not both — they register the same hooks
+two different ways.
 
-## How to run the specificity test
+**Tests** are stdlib `unittest` — no pytest, no extra deps:
 
-1. Do real work in a repo with Claude Code (bug fix, feature, refactor).
-2. When done, run:
-   ```
-   /post 1d
-   ```
-   (or `/post HEAD~3..HEAD`, or `/post since=2026-07-01`)
-3. Drafts save to `.postcommit/drafts/<UTC-ISO>.md` and open in your editor.
-4. In the same Claude Code session, also ask: `Write a LinkedIn post about what we just did.` — this is the DIY baseline.
-5. Compare honestly. Is the tool's output clearly better? Would you post it? Would you post the DIY one?
+```sh
+scripts/run-tests.sh           # or: python3 -m unittest discover -s tests
+```
 
-If tool ≫ DIY → Phase 1. If tool ≈ DIY → stop and rethink.
+**Lint:** `ruff check postcommit tests hooks` and `bandit -r postcommit hooks`.
 
-## Phase 1: the habit loop (hooks)
+### Layout
 
-The goal of Phase 1 is to stop relying on you remembering `/post`. Two Claude Code
-hooks make the recommendation ambient:
+```
+pyproject.toml                      # installable package; entry points below
+postcommit/                         # the package — all deterministic logic
+  __main__.py                       #   `postcommit` CLI: extract | state | hook | install
+  extract.py                        #   git + session-transcript → work bundle (masks secrets, caps diff)
+  scoring.py                        #   post-worthiness signals + scoring
+  state.py                          #   per-repo/global state (watermark, snooze, recommendation)
+  hooks.py                          #   SessionEnd / SessionStart logic
+  serve.py                          #   `postcommit-mcp` — local-only MCP server ([mcp] extra)
+  cloud_config.py / cloud_auth.py / cloud_client.py   # stdlib cloud REST client + auth seam
+  cloud_login.py                    #   loopback browser login (stdlib)
+  serve_cloud.py                    #   `postcommit-cloud-mcp` — networked MCP server ([cloud] extra)
+  install.py                        #   write the skill adapter into a host (~/.claude)
+  data/skill.md                     #   the thin skill adapter, shipped as package data
+commands/post.md                    # /post <window> — the manual trigger
+commands/post-snooze.md             # /post-snooze [days] — hush the nudge
+skills/postcommit-extract/SKILL.md  # thin skill adapter (mirror of data/skill.md)
+agents/post-writer.md               # the writer subagent — the LinkedIn taste layer
+hooks/                              # hooks.json + the two thin shims that call the CLI
+tests/                              # stdlib unittest suite
+scripts/link-local.sh               # dev-only local install
+```
 
-- **`SessionEnd`** (`postcommit.hooks`, via the `hooks/session-end.py` shim) — when a session closes, it cheaply and
-  deterministically (no model call) scores whether the work was post-worthy from git
-  (commits/churn since the last post) + transcript signals (real prompts, edits,
-  duration, debugging keywords). If it clears the threshold, it stages a lightweight
-  recommendation to `.postcommit/state/recommendation.json`. Idempotent, once per
-  session. If you already ran `/post` this session, it instead advances the watermark
-  so you won't be nudged about work you already acted on.
-- **`SessionStart`** (`postcommit.hooks`, via the `hooks/session-start.py` shim) — on a fresh start (`startup`/`clear`,
-  never `resume`), it reads the staged recommendation and surfaces it as an ambient
-  nudge. It is **instant** (file reads only, never generates) and hard-gated:
-  - only if there's unposted post-worthy work
-  - at most once per calendar day (global cooldown, `~/.postcommit/nudge-state.json`)
-  - not while snoozed
+**Entry points:** `postcommit` (CLI), `postcommit-mcp` (local MCP server, `[mcp]`
+extra), `postcommit-cloud-mcp` (cloud MCP server, `[cloud]` extra).
 
-### State
-
-- `.postcommit/state/recommendation.json` — the staged nudge (per repo).
-- `.postcommit/state/watermark.json` — what's already processed/posted, plus snooze
-  (per repo). Both live under the already-gitignored `.postcommit/`.
-- `~/.postcommit/nudge-state.json` — the global once-per-day cooldown.
-
-### Controlling nudges
-
-- `/post` acts on the recommendation (and clears it).
-- `/post-snooze [days]` hushes nudges for this repo (default 3 days).
-- `postcommit state show` inspects all state.
-  `snooze` / `unsnooze` / `mark-posted` / `reset` are also available as
-  `postcommit state <verb>`.
-
-Installing (via `scripts/link-local.sh`) installs the editable CLI and registers both
-hooks in `~/.claude/settings.json` (backed up to `settings.json.bak` first). `--unlink`
-removes all of it.
-
-## Design notes
-
-- **The subagent prompt is the whole product.** `agents/post-writer.md` is the taste/template layer — the file that decides whether a draft feels human or slop. Iterate there first.
-- **Three fixed angles** (debugging story / counterintuitive lesson / tiny tool share) so A/B comparison is apples-to-apples. Consider going dynamic only after the fixed angles have proven the wedge.
-- **Code-first, thin adapters.** The deterministic work (extraction, scoring, state) lives in the `postcommit` Python package. The command is a thin dispatcher, the skill/hooks are thin shims that call the CLI, and the subagent is the writer (creative, opinionated). Keep those boundaries clean when editing.
-- **Privacy by design.** Extraction masks secrets, caps diff size, skips sidechain records, and never touches the network. The Phase 3 posting MCP will only ever send **approved draft text** — not raw code or transcripts.
+**The subagent prompt is the product.** `agents/post-writer.md` is the taste/template
+layer that decides whether a draft reads human or like slop. Iterate there first when
+improving output quality.
 
 ## Roadmap
 
-- **Phase 0 (this)** — Manual `/post <window>`, three fixed-angle candidates saved to disk. Prove the wedge.
-- **Phase 1 (this)** — Two hooks: `SessionEnd` stages a recommendation if the session was post-worthy; `SessionStart` surfaces it as an ambient nudge. Gated (once/day cooldown, snooze, unposted-work-only, startup/clear only, instant file-read only).
-- **Phase 2** — Package as an installable Claude Code plugin + a small marketplace repo.
-- **Graphify-style repackaging (done)** — Move the real logic out of prompts/hooks into an installable Python package (`uv tool install postcommit`) with a `postcommit` CLI, a `postcommit-mcp` server, and a test suite. The skill/hooks became thin adapters over the CLI, unlocking version pinning, reuse outside Claude Code, and multi-host support.
-- **Phase 3 (later)** — Paid layer: MCP server for scheduling and posting approved drafts to LinkedIn. Draft-first, never silent.
+- ✅ **Local drafting** — `/post <window>`, three fixed-angle candidates saved to disk.
+- ✅ **Habit loop** — `SessionEnd` stages a recommendation; `SessionStart` surfaces an ambient, gated nudge.
+- ✅ **Installable package + plugin** — a dependency-free Python package with a CLI, MCP server, and test suite, plus a self-hosted plugin marketplace.
+- ✅ **Cloud drafting** — `postcommit-cloud-mcp` with loopback login and thin REST tools.
+- 🔜 **Scheduling & publishing** — schedule and publish approved drafts to LinkedIn. Draft-first, never silent.
+
+## License
+
+MIT.
