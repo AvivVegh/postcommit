@@ -13,6 +13,9 @@ Six tools, each a thin wrapper over CloudClient returning JSON text:
 The MCP SDK is an optional dependency (`postcommit[cloud]`), imported lazily so
 the dependency-free core still installs; running `postcommit-cloud-mcp` without
 the extra prints an install hint and exits non-zero — mirroring serve.py.
+
+`main()` also dispatches the `login` / `logout` subcommands to cloud_login
+*before* touching the MCP SDK, so authenticating works without the extra.
 """
 
 import json
@@ -89,6 +92,24 @@ def build_server():
 
 
 def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+
+    # `login` / `logout` are handled *before* build_server() so they work even
+    # when the `[cloud]`/`mcp` extra isn't installed — cloud_login is stdlib-only.
+    if argv[:1] == ["login"]:
+        from . import cloud_login
+        try:
+            cloud_login.login()
+        except cloud_login.LoginError as exc:
+            print("Login failed: %s" % exc, file=sys.stderr)
+            return 1
+        return 0
+    if argv[:1] == ["logout"]:
+        from . import cloud_login
+        cloud_login.logout()
+        return 0
+
     try:
         server = build_server()
     except ImportError:

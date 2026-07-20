@@ -148,5 +148,38 @@ class RefreshPath(CloudAuthBase):
         self.addCleanup(setattr, cloud_auth.urllib.request, "urlopen", saved)
 
 
+class ApiKeyFromCredsFallback(RefreshPath):
+    """The login-supplied api_key in credentials.json powers refresh with no env
+    config; the env var still wins when both are present."""
+
+    def _capturing_urlopen(self, captured):
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            return _FakeResponse({"id_token": "fresh", "expires_in": "3600"})
+        return fake_urlopen
+
+    def test_creds_api_key_used_when_env_unset(self):
+        # No POSTCOMMIT_FIREBASE_API_KEY; api_key comes from credentials.json.
+        self._write_creds({
+            "refresh_token": "r-old", "expires_at": 0, "api_key": "creds-key"})
+        captured = {}
+        self._patch_urlopen(self._capturing_urlopen(captured))
+
+        provider = cloud_auth.CredentialProvider(self.creds)
+        self.assertEqual(provider.get_id_token(), "fresh")
+        self.assertIn("key=creds-key", captured["url"])
+
+    def test_env_key_wins_over_creds_key(self):
+        os.environ["POSTCOMMIT_FIREBASE_API_KEY"] = "env-key"
+        self._write_creds({
+            "refresh_token": "r-old", "expires_at": 0, "api_key": "creds-key"})
+        captured = {}
+        self._patch_urlopen(self._capturing_urlopen(captured))
+
+        provider = cloud_auth.CredentialProvider(self.creds)
+        self.assertEqual(provider.get_id_token(), "fresh")
+        self.assertIn("key=env-key", captured["url"])
+
+
 if __name__ == "__main__":
     unittest.main()

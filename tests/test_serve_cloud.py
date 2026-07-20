@@ -56,6 +56,44 @@ class ToolRegistration(unittest.TestCase):
         })
 
 
+class LoginDispatch(unittest.TestCase):
+    """main() routes login/logout to cloud_login before touching the MCP SDK, so
+    they work even without the `[cloud]` extra installed."""
+
+    def setUp(self):
+        from postcommit import cloud_login
+        self.cloud_login = cloud_login
+        self._saved = (cloud_login.login, cloud_login.logout)
+        self.addCleanup(self._restore)
+
+    def _restore(self):
+        self.cloud_login.login, self.cloud_login.logout = self._saved
+
+    def test_login_argv_calls_cloud_login_login(self):
+        calls = []
+        self.cloud_login.login = lambda: calls.append("login")
+        rc = serve_cloud.main(["login"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, ["login"])
+
+    def test_login_error_returns_nonzero(self):
+        def boom():
+            raise self.cloud_login.LoginError("timed out")
+        self.cloud_login.login = boom
+        err = io.StringIO()
+        with redirect_stderr(err):
+            rc = serve_cloud.main(["login"])
+        self.assertEqual(rc, 1)
+        self.assertIn("timed out", err.getvalue())
+
+    def test_logout_argv_calls_cloud_login_logout(self):
+        calls = []
+        self.cloud_login.logout = lambda: calls.append("logout")
+        rc = serve_cloud.main(["logout"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, ["logout"])
+
+
 class RunHelper(unittest.TestCase):
     """_run maps client outcomes to structured JSON without needing MCP."""
 

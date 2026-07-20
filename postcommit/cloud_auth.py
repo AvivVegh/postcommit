@@ -61,7 +61,9 @@ class CredentialProvider:
             return cached
 
         refresh_token = creds.get("refresh_token")
-        api_key = cloud_config.firebase_api_key()
+        # The env var wins when set; otherwise fall back to the api_key the login
+        # flow stored in credentials.json, so refresh works with zero env config.
+        api_key = cloud_config.firebase_api_key() or creds.get("api_key")
         if refresh_token and api_key:
             return self._refresh(refresh_token, api_key, creds)
 
