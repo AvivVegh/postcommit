@@ -31,8 +31,7 @@ DEFAULT_API_URL = "https://api.postcommit.app"
 # Production dashboard base URL, whose /cli-auth page hands tokens back to the
 # CLI loopback server during `postcommit-cloud-mcp login`. Override with
 # POSTCOMMIT_DASHBOARD_URL for local development.
-# TODO(cloud): confirm the final dashboard domain before release.
-DEFAULT_DASHBOARD_URL = "https://app.postcommit.app"
+DEFAULT_DASHBOARD_URL = "https://platfrom.postcommit.dev"
 
 
 class ConfigError(Exception):
