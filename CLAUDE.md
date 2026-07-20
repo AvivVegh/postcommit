@@ -21,7 +21,7 @@ real logic, and the Claude Code plugin surface (command/skill/agent/hooks) are t
 adapters that shell out to the installed `postcommit` CLI. This mirrors graphify.
 
 ```
-pyproject.toml                      # installable package: [project.scripts] postcommit + postcommit-mcp
+pyproject.toml                      # installable package: [project.scripts] postcommit + postcommit-mcp + postcommit-cloud-mcp
 uv.lock                             # pinned resolution (core is dependency-free; mcp is a 3.10+ extra)
 postcommit/                         # the package — all deterministic logic lives here
   __main__.py                       #   `postcommit` CLI dispatch: extract | state | hook | install
@@ -29,7 +29,11 @@ postcommit/                         # the package — all deterministic logic li
   scoring.py                        #   post-worthiness signals + scoring (from the old session-end)
   state.py                          #   time/paths/json/watermark/git helpers + `state` verbs
   hooks.py                          #   handle_session_end / handle_session_start
-  serve.py                          #   `postcommit-mcp` MCP server (optional [mcp] extra)
+  serve.py                          #   `postcommit-mcp` MCP server (optional [mcp] extra) — local only
+  cloud_config.py                   #   cloud-client config from env (stdlib core)
+  cloud_auth.py                     #   CredentialProvider seam: env/refresh id_token (stdlib core)
+  cloud_client.py                   #   thin REST client for postcommit-cloud (stdlib urllib)
+  serve_cloud.py                    #   `postcommit-cloud-mcp` MCP server (optional [cloud] extra) — network passthrough
   install.py                        #   write the skill adapter into a host (~/.claude)
   data/skill.md                     #   the thin skill adapter, shipped as package-data
 .claude-plugin/plugin.json          # plugin manifest (name, version — kept in sync with pyproject)
@@ -130,9 +134,21 @@ interactive install QA in `docs/smoke-test.md`.
   same three angles (debugging story / counterintuitive lesson / tiny tool share) so
   A/B comparison against the DIY baseline stays apples-to-apples. Don't make them
   dynamic until the fixed angles have proven the wedge.
-- **Privacy is non-negotiable.** Everything runs locally. Never add a step that sends
-  transcripts, diffs, or drafts over the network. Extraction masks secrets, caps diff
-  size (~40k chars), keeps ≤10 lines per code snippet, and skips `isSidechain` records.
+- **Privacy is non-negotiable.** The *extraction/drafting* path runs entirely locally.
+  Never add a step that sends transcripts, diffs, or drafts over the network from it.
+  Extraction masks secrets, caps diff size (~40k chars), keeps ≤10 lines per code
+  snippet, and skips `isSidechain` records. The one deliberate exception is the
+  **cloud MCP client** (`serve_cloud.py`, `[cloud]` extra): it passes *already-approved
+  draft text* to the postcommit-cloud REST API and nothing else. It is a **separate**
+  server from the local-only `postcommit-mcp` precisely so the local guarantee holds —
+  keep `serve.py` and the extraction path network-free, and keep all outbound HTTP
+  confined to `cloud_client.py`/`cloud_auth.py`.
+- **Cloud client boundary.** `cloud_config.py`/`cloud_auth.py`/`cloud_client.py` are
+  **stdlib-only core** (they install without any extra); only `serve_cloud.py` imports
+  the `mcp` SDK. Auth flows through the `CredentialProvider` seam in `cloud_auth.py`
+  (env token → cached/refreshed `~/.postcommit/credentials.json`); a later ticket adds
+  the interactive login that populates that file — do not add throwaway auth scaffolding
+  elsewhere.
 - **No fabrication.** The writer must never invent numbers, timings, error messages, or
   file names not present in the bundle. Preserve this rule in any edit to the writer.
 - **Generated output** lands in `.postcommit/` (git-ignored). Drafts are named by UTC

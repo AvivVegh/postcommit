@@ -25,7 +25,11 @@ postcommit/                         # the package — all the real logic
   scoring.py                        #   post-worthiness signals + scoring
   state.py                          #   per-repo/global state (watermark, snooze, rec)
   hooks.py                          #   SessionEnd / SessionStart logic
-  serve.py                          #   `postcommit-mcp` MCP server (optional extra)
+  serve.py                          #   `postcommit-mcp` MCP server (optional extra) — local only
+  cloud_config.py                   #   cloud-client config from env (stdlib)
+  cloud_auth.py                     #   CredentialProvider seam: id_token + refresh (stdlib)
+  cloud_client.py                   #   thin REST client for postcommit-cloud (stdlib urllib)
+  serve_cloud.py                    #   `postcommit-cloud-mcp` MCP server (optional [cloud] extra)
   install.py                        #   write the skill adapter into a host (~/.claude)
   data/skill.md                     #   the thin skill adapter, shipped as package data
 .claude-plugin/plugin.json          # plugin manifest (name, version, metadata)
@@ -42,8 +46,39 @@ tests/                              # stdlib unittest suite for the package
 scripts/link-local.sh               # dev-only: uv-install editable + symlink + hooks
 ```
 
-**Entry points:** `postcommit` (the CLI) and `postcommit-mcp` (the MCP server, needs
-the `[mcp]` extra).
+**Entry points:** `postcommit` (the CLI), `postcommit-mcp` (the local-only MCP
+server, needs the `[mcp]` extra), and `postcommit-cloud-mcp` (the cloud MCP client,
+needs the `[cloud]` extra — see below).
+
+### Cloud MCP client (`postcommit-cloud-mcp`)
+
+A **separate** MCP server that exposes six thin tools passing through to the
+postcommit-cloud REST API — so drafts can be created/scheduled/published from any
+MCP host. It is deliberately split from the local-only `postcommit-mcp`: the free
+plugin's "nothing leaves the machine" guarantee stays intact because this server
+lives behind its own `[cloud]` extra and is the *only* piece that touches the network.
+
+```
+uv tool install 'postcommit[cloud]'
+```
+
+Tools: `create_post`, `list_posts`, `update_post`, `delete_post`,
+`linkedin_status`, `linkedin_disconnect`.
+
+Configuration (env vars):
+
+- `POSTCOMMIT_CLOUD_API_URL` — REST API base URL. Optional; defaults to the
+  production gateway. Point it at a local backend for dev
+  (`export POSTCOMMIT_CLOUD_API_URL=http://localhost:8080`).
+- `POSTCOMMIT_CLOUD_TOKEN` — a pasted Firebase id_token. **This is the v0 auth
+  path** and the fastest way to try the tools today.
+- `POSTCOMMIT_FIREBASE_API_KEY` — used only to refresh an id_token from a cached
+  refresh token in `~/.postcommit/credentials.json`.
+
+> **Auth is a stub until the login flow ships.** The `CredentialProvider` seam in
+> `cloud_auth.py` already resolves a token from the env, or from a refresh token in
+> `~/.postcommit/credentials.json`. A future ticket adds the interactive login that
+> *populates* that file; until then, set `POSTCOMMIT_CLOUD_TOKEN` by hand.
 
 ## Install
 
