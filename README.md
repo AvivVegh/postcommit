@@ -207,14 +207,6 @@ extra), `postcommit-cloud-mcp` (cloud MCP server, `[cloud]` extra).
 layer that decides whether a draft reads human or like slop. Iterate there first when
 improving output quality.
 
-## Roadmap
-
-- ✅ **Local drafting** — `/post <window>`, three fixed-angle candidates saved to disk.
-- ✅ **Habit loop** — `SessionEnd` stages a recommendation; `SessionStart` surfaces an ambient, gated nudge.
-- ✅ **Installable package + plugin** — a dependency-free Python package with a CLI, MCP server, and test suite, plus a self-hosted plugin marketplace.
-- ✅ **Cloud drafting** — `postcommit-cloud-mcp` with loopback login and thin REST tools.
-- 🔜 **Scheduling & publishing** — schedule and publish approved drafts to LinkedIn. Draft-first, never silent.
-
 ## License
 
 MIT.
