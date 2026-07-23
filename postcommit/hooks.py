@@ -61,7 +61,9 @@ def _ensure_launcher(plugin_root):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(desired)
-        os.chmod(path, 0o755)
+        # Owner-only rwx: this launcher lives under the user's ~/.postcommit and
+        # is only ever invoked by them — no need to grant group/other access.
+        os.chmod(path, 0o700)
     except Exception:
         pass
 

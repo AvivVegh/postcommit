@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "postcommit"
-version = "0.4.0"
+version = "0.5.0"
 description = "Turn real dev work — git history plus Claude Code session transcripts — into candidate LinkedIn posts. Local-only, dependency-free core."
 readme = "README.md"
 requires-python = ">=3.9"
