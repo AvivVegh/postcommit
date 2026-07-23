@@ -80,7 +80,10 @@ unlink_one() {
 
 install_package() {
   # Install the CLI as an editable uv tool so it's on PATH and tracks this
-  # checkout. The thin hooks and skill shell out to `postcommit`.
+  # checkout. The thin hooks and skill shell out to `postcommit`. (In prod the
+  # published plugin bundles the package instead and reaches it via the
+  # SessionStart-written launcher at ~/.postcommit/bin/postcommit — no PATH
+  # install needed; this editable install is a local-dev convenience.)
   if ! command -v uv >/dev/null 2>&1; then
     echo "  ✗ uv not found — install it (https://docs.astral.sh/uv/) then re-run," >&2
     echo "    or 'pip install -e $REPO_ROOT' yourself so 'postcommit' is on PATH." >&2

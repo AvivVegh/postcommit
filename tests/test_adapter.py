@@ -24,7 +24,7 @@ class Forward(unittest.TestCase):
     def _timeout_for(self, event):
         captured = {}
 
-        def fake_run(cmd, input=None, timeout=None, check=None):
+        def fake_run(cmd, input=None, timeout=None, env=None, check=None):
             captured["timeout"] = timeout
 
         real_stdin = sys.stdin

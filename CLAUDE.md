@@ -53,12 +53,18 @@ README.md                           # product framing, roadmap, how to run the w
 .gitignore                          # ignores .postcommit/, build artifacts, tooling caches
 ```
 
-Distribution has two pieces: install the CLI (`uv tool install postcommit`) so the
-adapters have something to call, then install the plugin (`/plugin marketplace add
-AvivVegh/postcommit` → `/plugin install postcommit`). Hooks are registered from
-`hooks/hooks.json` using `${CLAUDE_PLUGIN_ROOT}` and removed automatically on uninstall
-— the `settings.json` surgery in `link-local.sh` is only for local iteration, never for
-the published plugin. `skills/postcommit-extract/SKILL.md` is a byte-for-byte mirror of
+Distribution is **single-install**: `/plugin marketplace add AvivVegh/postcommit` →
+`/plugin install postcommit`. Installing a `source: "./"` plugin copies the *whole
+repo* into `${CLAUDE_PLUGIN_ROOT}` — so the stdlib-only `postcommit/` package rides
+along and runs via `python3 -m postcommit`; there is no separate `uv/pip` step (that
+remains an optional fallback for python-less machines / non-Claude hosts). The CLI is
+reached through a three-tier resolution — **PATH `postcommit` → the launcher at
+`~/.postcommit/bin/postcommit` → `python3 -m postcommit`** — and the launcher is what
+bridges the model-run `/post` path to the bundled package (see the architecture note
+below). Hooks are registered from `hooks/hooks.json` using `${CLAUDE_PLUGIN_ROOT}` and
+removed automatically on uninstall — the `settings.json` surgery in `link-local.sh` is
+only for local iteration, never for the published plugin.
+`skills/postcommit-extract/SKILL.md` is a byte-for-byte mirror of
 `postcommit/data/skill.md`; keep them identical (the package-data copy is what
 `postcommit install` writes into other hosts).
 
@@ -87,6 +93,16 @@ Data flow: `/post <window>` → extract skill → `postcommit extract` (determin
 bundle) → model fills Candidate signal → post-writer subagent → 3 candidate drafts →
 saved to disk → opened in editor. The SessionEnd/SessionStart habit-loop is the same
 logic (`postcommit.hooks`/`scoring`/`state`), reached through the thin `hooks/` shims.
+
+**Reaching the bundled CLI (single-install plumbing).** `${CLAUDE_PLUGIN_ROOT}` is only
+available to hooks, *not* to the model-run command/skill. So the SessionStart hook
+(`hooks._ensure_launcher`, called first in `handle_session_start`) writes a tiny
+launcher to the fixed path `~/.postcommit/bin/postcommit` that `exec`s `python3 -m
+postcommit` with `PYTHONPATH` pointed at the current plugin root. The extract skill then
+resolves the CLI as PATH `postcommit` → that launcher → `python3 -m postcommit`. The
+launcher is idempotent and rewritten only when the plugin root moves (upgrades). The
+hook shims' `hooks/_adapter.py` mirrors the same fallback so the hooks themselves run
+the bundled package without a PATH install.
 
 ## Build / test / lint
 

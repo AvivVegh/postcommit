@@ -22,10 +22,20 @@ Your remaining job is one small piece of judgment: the **Candidate signal**.
 
 ## Step 1 — Build the deterministic bundle
 
-Run:
+Run the postcommit CLI to emit the bundle. The plugin bundles the package, so no
+separate install is required — resolve the command in this order and use the
+first that runs:
+
+1. `postcommit extract <window>` — a standalone install on PATH.
+2. `~/.postcommit/bin/postcommit extract <window>` — the plugin-bundled launcher
+   (written by the SessionStart hook).
+3. `python3 -m postcommit extract <window>` — a source checkout.
+
+In practice this one-liner picks the right one:
 
 ```
-postcommit extract <window>
+( command -v postcommit >/dev/null 2>&1 && postcommit extract <window> ) \
+  || ~/.postcommit/bin/postcommit extract <window>
 ```
 
 It prints a complete work bundle to stdout: repo header, git narrative (commits,
@@ -36,10 +46,11 @@ verbatim.
 If the bundle's only content is `> No meaningful work in window.`, stop and tell
 the user plainly. Do not fabricate a bundle.
 
-If `postcommit` is not found on PATH, install it once with
-`uv tool install postcommit` (or `pip install postcommit`) and re-run. If it
-still cannot run, tell the user how to install it rather than guessing at the
-extraction by hand.
+If none of the above resolve — no `postcommit` on PATH and no
+`~/.postcommit/bin/postcommit` (e.g. Claude Code hasn't run a SessionStart since
+the plugin was installed) — tell the user to restart Claude Code once so the hook
+writes the launcher, or to install the CLI with `uv tool install postcommit`.
+Don't guess at the extraction by hand.
 
 ## Step 2 — Fill the Candidate signal
 

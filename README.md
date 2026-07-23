@@ -40,20 +40,7 @@ subagent that actually writes). The command, skill, and hooks are thin glue betw
 
 ## Install
 
-Two pieces: the Python package (does the work) and the Claude Code plugin (wires `/post`
-and the hooks into Claude Code — both call the package).
-
-**1. Install the CLI:**
-
-```sh
-uv tool install postcommit
-# or:  pipx install postcommit  /  pip install postcommit
-```
-
-The core is dependency-free stdlib, so it installs anywhere. `postcommit --version`
-should now work on your PATH.
-
-**2. Install the plugin.** This repo is its own plugin marketplace:
+One step. This repo is its own plugin marketplace:
 
 ```
 /plugin marketplace add AvivVegh/postcommit
@@ -62,10 +49,17 @@ should now work on your PATH.
 
 That registers the `/post` and `/post-snooze` commands, the extract skill, the
 post-writer subagent, and the two hooks. Uninstalling removes all of them automatically
-— no manual `settings.json` editing.
+— no manual `settings.json` editing. Restart Claude Code once after installing so the
+`SessionStart` hook can wire up the bundled CLI, then `/post` just works.
 
-To update later: `uv tool upgrade postcommit` for the CLI, `/plugin update postcommit`
-for the plugin.
+The plugin **bundles the Python package** that does the real work (it's dependency-free
+stdlib), and runs it via your system `python3` (3.9+) — so there's nothing else to
+install. To update later: `/plugin update postcommit`.
+
+> **No system `python3`?** Install the CLI standalone and the plugin will prefer it:
+> `uv tool install postcommit` (or `pipx install postcommit` / `pip install postcommit`).
+> `uv` bundles its own interpreter, so this also covers machines without Python. This is
+> also how you get a standalone `postcommit` CLI for use outside Claude Code.
 
 ## Usage
 

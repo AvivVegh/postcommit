@@ -22,6 +22,49 @@ from . import state as st
 
 FRESH_SOURCES = {"startup", "clear"}
 
+# Written to ~/.postcommit/bin/postcommit so the model-run /post path (which
+# cannot see ${CLAUDE_PLUGIN_ROOT}) can invoke the plugin-bundled package with no
+# separate pip/uv install. PYTHONPATH points at the plugin root so `python3 -m
+# postcommit` imports the bundled copy.
+_LAUNCHER_TEMPLATE = (
+    "#!/bin/sh\n"
+    "# postcommit launcher — auto-written by the SessionStart hook. Lets the\n"
+    "# /post command and extract skill reach the plugin-bundled package without a\n"
+    "# separate install. Regenerated whenever the plugin root changes.\n"
+    "export PYTHONPATH=\"%s${PYTHONPATH:+:$PYTHONPATH}\"\n"
+    "exec python3 -m postcommit \"$@\"\n"
+)
+
+
+def _ensure_launcher(plugin_root):
+    """Best-effort: write ~/.postcommit/bin/postcommit pointing at plugin_root.
+
+    No-op when plugin_root is unknown (source checkout / standalone install) or
+    doesn't actually bundle the package, and when the launcher is already current
+    — so an upgrade that moves the plugin root is picked up but a steady state
+    isn't rewritten every session. Never raises: a hook must not break a session.
+    """
+    if not plugin_root:
+        return
+    try:
+        if not os.path.isfile(
+                os.path.join(plugin_root, "postcommit", "__main__.py")):
+            return  # plugin_root doesn't bundle the package — nothing to launch
+        path = st.launcher_path()
+        desired = _LAUNCHER_TEMPLATE % plugin_root
+        try:
+            with open(path, encoding="utf-8") as fh:
+                if fh.read() == desired:
+                    return  # already current
+        except OSError:
+            pass
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(desired)
+        os.chmod(path, 0o755)
+    except Exception:
+        pass
+
 
 # --- SessionEnd -------------------------------------------------------------
 
@@ -101,6 +144,10 @@ def handle_session_start(payload):
 
     Side effect on success: stamps the global once-per-day cooldown.
     """
+    # Bootstrap the plugin launcher on every start (any source), before the
+    # nudge gates — this is how the /post path reaches the bundled package.
+    _ensure_launcher(os.environ.get("CLAUDE_PLUGIN_ROOT"))
+
     # Gate 1: only on a genuine fresh start.
     source = payload.get("source")
     if source not in FRESH_SOURCES:
