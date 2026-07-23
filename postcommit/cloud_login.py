@@ -36,6 +36,18 @@ DEFAULT_TIMEOUT_SECONDS = 300
 _CALLBACK_PATH = "/callback"
 
 
+def _field(payload, *keys):
+    """First non-empty value among `keys` in `payload`, else None.
+
+    Lets both auth flows accept camelCase or snake_case field names from the
+    dashboard without caring which convention it settled on.
+    """
+    for key in keys:
+        if payload.get(key) not in (None, ""):
+            return payload[key]
+    return None
+
+
 class LoginError(Exception):
     """The loopback login could not be completed."""
 
@@ -82,8 +94,10 @@ class _CallbackHandler(BaseHTTPRequestHandler):
             self.server.done = True
             return
 
-        id_token = payload.get("idToken")
-        refresh_token = payload.get("refreshToken")
+        # Accept camelCase or snake_case so the same dashboard payload works for
+        # both this loopback POST and the paste bundle (_decode_bundle).
+        id_token = _field(payload, "idToken", "id_token")
+        refresh_token = _field(payload, "refreshToken", "refresh_token")
         if not id_token or not refresh_token:
             self._respond(400, {"error": "missing idToken/refreshToken"})
             self.server.error = "callback omitted idToken or refreshToken"
@@ -91,7 +105,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            expires_in = float(payload.get("expiresIn", 3600))
+            expires_in = float(_field(payload, "expiresIn", "expires_in") or 3600)
         except (TypeError, ValueError):
             expires_in = 3600.0
 
@@ -99,7 +113,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
             "refresh_token": refresh_token,
             "id_token": id_token,
             "expires_at": time.time() + expires_in,
-            "api_key": payload.get("apiKey"),
+            "api_key": _field(payload, "apiKey", "api_key"),
         }
         _write_credentials(self.server.creds_path, creds)
 
@@ -215,6 +229,102 @@ def login(dashboard_url=None, timeout=DEFAULT_TIMEOUT_SECONDS,
     print(_identity_line(server.result["id_token"]))
     print("Credentials written to %s" % creds_path)
     return server.result
+
+
+def _b64_any(text):
+    """base64-decode `text`, tolerating url-safe alphabets and missing padding.
+
+    Picks the url-safe decoder when the string carries `-`/`_`, the standard one
+    otherwise, and validates so a wrong-alphabet character raises rather than
+    being silently dropped (b64decode's default) and corrupting the payload.
+    """
+    padded = text + "=" * (-len(text) % 4)
+    urlsafe = "-" in text or "_" in text
+    decoder = base64.urlsafe_b64decode if urlsafe else base64.b64decode
+    try:
+        return decoder(padded, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise LoginError("token is not valid base64") from exc
+
+
+def _decode_bundle(blob):
+    """Decode the dashboard's copy-token blob into a credentials.json dict.
+
+    The blob is base64(JSON) holding a refresh bundle. Accepts standard or
+    url-safe base64 and both snake_case and camelCase field names, and requires
+    a refresh_token + api_key so the plugin can refresh forever (a paste-once
+    experience). Raises LoginError on anything malformed or incomplete.
+    """
+    text = (blob or "").strip()
+    if not text:
+        raise LoginError("no token provided")
+
+    try:
+        data = json.loads(_b64_any(text).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise LoginError("token is not valid base64-encoded JSON") from exc
+    if not isinstance(data, dict):
+        raise LoginError("token did not decode to a JSON object")
+
+    refresh_token = _field(data, "refresh_token", "refreshToken")
+    api_key = _field(data, "api_key", "apiKey")
+    if not refresh_token or not api_key:
+        raise LoginError(
+            "token is missing refresh_token/api_key — copy a fresh one from the "
+            "dashboard (Settings → Auth → Copy token)")
+
+    creds = {
+        "refresh_token": refresh_token,
+        "id_token": _field(data, "id_token", "idToken"),
+        "api_key": api_key,
+    }
+
+    # Prefer an absolute expiry when the bundle carries one; otherwise derive it
+    # from expires_in. A wrong/absent value only costs one early refresh, since
+    # a refresh_token is present either way.
+    expires_at = _field(data, "expires_at", "expiresAt")
+    if expires_at is not None:
+        try:
+            creds["expires_at"] = float(expires_at)
+        except (TypeError, ValueError):
+            expires_at = None
+    if creds.get("expires_at") is None:
+        expires_in = _field(data, "expires_in", "expiresIn")
+        try:
+            creds["expires_at"] = time.time() + float(
+                expires_in if expires_in is not None else 3600)
+        except (TypeError, ValueError):
+            creds["expires_at"] = time.time() + 3600.0
+    return creds
+
+
+def login_paste(blob=None, creds_path=None, input_fn=None):
+    """Paste-token login: decode the dashboard bundle and write credentials.json.
+
+    This is the flow the dashboard's "Plugin authentication → Copy token" page
+    feeds: the user copies one base64 bundle and pastes it here. Because it holds
+    a refresh_token, `cloud_auth.CredentialProvider` refreshes automatically from
+    then on — the user pastes once.
+
+    blob defaults to a single line read interactively (input_fn is injectable for
+    tests). creds_path defaults to cloud_auth.credentials_path(). Raises
+    LoginError on a malformed or incomplete token.
+    """
+    creds_path = creds_path or cloud_auth.credentials_path()
+    if blob is None:
+        reader = input_fn or input
+        try:
+            blob = reader(
+                "Paste the token from the dashboard "
+                "(Settings → Auth → Copy token), then press Enter:\n> ")
+        except EOFError as exc:
+            raise LoginError("no token provided") from exc
+
+    creds = _decode_bundle(blob)
+    _write_credentials(creds_path, creds)
+    print(_identity_line(creds.get("id_token") or ""))
+    print("Credentials written to %s" % creds_path)
+    return creds
 
 
 def logout(creds_path=None):

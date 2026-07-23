@@ -16,6 +16,8 @@ the extra prints an install hint and exits non-zero — mirroring serve.py.
 
 `main()` also dispatches the `login` / `logout` subcommands to cloud_login
 *before* touching the MCP SDK, so authenticating works without the extra.
+`login` defaults to the paste flow (the dashboard's copy-token bundle);
+`login --browser` runs the loopback flow instead.
 """
 
 import json
@@ -105,8 +107,16 @@ def main(argv=None):
     # when the `[cloud]`/`mcp` extra isn't installed — cloud_login is stdlib-only.
     if argv[:1] == ["login"]:
         from . import cloud_login
+        rest = argv[1:]
         try:
-            cloud_login.login()
+            if "--browser" in rest:
+                # Loopback browser flow (needs the dashboard's /cli-auth page).
+                cloud_login.login()
+            else:
+                # Default: paste the dashboard's copy-token bundle. An optional
+                # inline token (`login <token>`) keeps it scriptable/testable.
+                token = next((a for a in rest if not a.startswith("-")), None)
+                cloud_login.login_paste(blob=token)
         except cloud_login.LoginError as exc:
             print("Login failed: %s" % exc, file=sys.stderr)
             return 1

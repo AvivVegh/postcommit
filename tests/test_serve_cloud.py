@@ -63,28 +63,43 @@ class LoginDispatch(unittest.TestCase):
     def setUp(self):
         from postcommit import cloud_login
         self.cloud_login = cloud_login
-        self._saved = (cloud_login.login, cloud_login.logout)
+        self._saved = (cloud_login.login, cloud_login.login_paste, cloud_login.logout)
         self.addCleanup(self._restore)
 
     def _restore(self):
-        self.cloud_login.login, self.cloud_login.logout = self._saved
+        (self.cloud_login.login, self.cloud_login.login_paste,
+         self.cloud_login.logout) = self._saved
 
-    def test_login_argv_calls_cloud_login_login(self):
+    def test_login_argv_defaults_to_paste(self):
         calls = []
-        self.cloud_login.login = lambda: calls.append("login")
+        self.cloud_login.login_paste = lambda blob=None: calls.append(("paste", blob))
         rc = serve_cloud.main(["login"])
         self.assertEqual(rc, 0)
-        self.assertEqual(calls, ["login"])
+        self.assertEqual(calls, [("paste", None)])
+
+    def test_login_forwards_inline_token_to_paste(self):
+        calls = []
+        self.cloud_login.login_paste = lambda blob=None: calls.append(("paste", blob))
+        rc = serve_cloud.main(["login", "the-token"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, [("paste", "the-token")])
+
+    def test_login_browser_flag_calls_loopback(self):
+        calls = []
+        self.cloud_login.login = lambda: calls.append("browser")
+        rc = serve_cloud.main(["login", "--browser"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(calls, ["browser"])
 
     def test_login_error_returns_nonzero(self):
-        def boom():
-            raise self.cloud_login.LoginError("timed out")
-        self.cloud_login.login = boom
+        def boom(blob=None):
+            raise self.cloud_login.LoginError("bad token")
+        self.cloud_login.login_paste = boom
         err = io.StringIO()
         with redirect_stderr(err):
             rc = serve_cloud.main(["login"])
         self.assertEqual(rc, 1)
-        self.assertIn("timed out", err.getvalue())
+        self.assertIn("bad token", err.getvalue())
 
     def test_logout_argv_calls_cloud_login_logout(self):
         calls = []
