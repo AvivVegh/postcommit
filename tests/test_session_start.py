@@ -140,5 +140,92 @@ class Gates(unittest.TestCase):
         self.assertFalse(self._fired(self._run()))  # cooldown now stamped
 
 
+class Launcher(unittest.TestCase):
+    """ss._ensure_launcher writes the ~/.postcommit/bin/postcommit shim that the
+    model-run /post path uses to reach the plugin-bundled package."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = os.path.join(self.tmp.name, "home")
+        os.makedirs(self.home)
+        # point HOME at the throwaway dir so launcher_path() resolves under it
+        self._prev_home = os.environ.get("HOME")
+        os.environ["HOME"] = self.home
+        self.addCleanup(self._restore_home)
+
+    def _restore_home(self):
+        if self._prev_home is None:
+            os.environ.pop("HOME", None)
+        else:
+            os.environ["HOME"] = self._prev_home
+
+    def _plugin_root(self, name="plugin"):
+        """A fake plugin root that actually bundles the package (has __main__.py)."""
+        root = os.path.join(self.tmp.name, name)
+        os.makedirs(os.path.join(root, "postcommit"))
+        with open(os.path.join(root, "postcommit", "__main__.py"), "w") as fh:
+            fh.write("# marker\n")
+        return root
+
+    def _launcher(self):
+        return os.path.join(self.home, ".postcommit", "bin", "postcommit")
+
+    def _read_launcher(self):
+        with open(self._launcher(), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_writes_executable_launcher_pointing_at_root(self):
+        root = self._plugin_root()
+        ss._ensure_launcher(root)
+        p = self._launcher()
+        self.assertTrue(os.path.isfile(p))
+        self.assertTrue(os.access(p, os.X_OK))
+        body = self._read_launcher()
+        self.assertIn(root, body)
+        self.assertIn("python3 -m postcommit", body)
+
+    def test_idempotent_content_stable(self):
+        root = self._plugin_root()
+        ss._ensure_launcher(root)
+        first = self._read_launcher()
+        ss._ensure_launcher(root)
+        self.assertEqual(first, self._read_launcher())
+
+    def test_rewrites_when_plugin_root_changes(self):
+        ss._ensure_launcher(self._plugin_root("plugin-a"))
+        newroot = self._plugin_root("plugin-b")
+        ss._ensure_launcher(newroot)
+        body = self._read_launcher()
+        self.assertIn(newroot, body)
+        self.assertNotIn("plugin-a", body)
+
+    def test_noop_when_root_unknown(self):
+        ss._ensure_launcher(None)
+        self.assertFalse(os.path.exists(self._launcher()))
+
+    def test_noop_when_package_not_bundled(self):
+        empty = os.path.join(self.tmp.name, "empty")
+        os.makedirs(empty)  # no postcommit/__main__.py inside
+        ss._ensure_launcher(empty)
+        self.assertFalse(os.path.exists(self._launcher()))
+
+    def test_session_start_writes_launcher_via_env(self):
+        """handle_session_start bootstraps the launcher from CLAUDE_PLUGIN_ROOT,
+        even on a non-fresh source that produces no nudge."""
+        root = self._plugin_root("plugin-env")
+        prev = os.environ.get("CLAUDE_PLUGIN_ROOT")
+        os.environ["CLAUDE_PLUGIN_ROOT"] = root
+        try:
+            out = ss.handle_session_start({"source": "resume", "cwd": self.home})
+        finally:
+            if prev is None:
+                os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
+            else:
+                os.environ["CLAUDE_PLUGIN_ROOT"] = prev
+        self.assertIsNone(out)  # resume → no nudge
+        self.assertTrue(os.path.isfile(self._launcher()))  # but launcher written
+
+
 if __name__ == "__main__":
     unittest.main()

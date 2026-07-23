@@ -79,6 +79,19 @@ def nudge_state_path():
     return os.path.join(global_dir(), "nudge-state.json")
 
 
+def bin_dir():
+    return os.path.join(global_dir(), "bin")
+
+
+def launcher_path():
+    """Fixed path to the plugin launcher the SessionStart hook writes.
+
+    The model-run /post path can't see ${CLAUDE_PLUGIN_ROOT}, so it reaches the
+    plugin-bundled package through this stable location instead.
+    """
+    return os.path.join(bin_dir(), "postcommit")
+
+
 # --- json io ----------------------------------------------------------------
 
 
