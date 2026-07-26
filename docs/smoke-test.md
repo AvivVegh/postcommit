@@ -56,8 +56,8 @@ Point Claude Code at this working copy as a local marketplace. In Claude Code:
 ```
 
 - [ ] Install completes with no manifest / schema errors.
-- [ ] `/help` (or the command list) shows **`/post`**, **`/post-snooze`**, and
-      **`/post-login`**.
+- [ ] `/help` (or the command list) shows **`/post`**, **`/snooze`**, and
+      **`/login`**.
 - [ ] The `postcommit-extract` skill and `post-writer` subagent are listed.
 - [ ] Hooks registered — see **Verifying hooks** below.
 
@@ -95,7 +95,7 @@ Launch Claude Code with that env set. In Claude Code:
 - [ ] Marketplace resolves from GitHub `main` and lists `postcommit` at the
       version in `plugin.json`.
 - [ ] Install completes clean.
-- [ ] `/post`, `/post-snooze`, and `/post-login` are available.
+- [ ] `/post`, `/snooze`, and `/login` are available.
 - [ ] Skill + subagent listed.
 - [ ] Hooks registered — see below.
 
@@ -161,10 +161,10 @@ something to score.
       should surface an ambient nudge (once/day, unposted-work-only).
 - [ ] Running `/post` clears the recommendation; a second fresh start does **not**
       nudge again.
-- [ ] `/post-snooze 1` suppresses the nudge; confirm no nudge on next start.
+- [ ] `/snooze 1` suppresses the nudge; confirm no nudge on next start.
 
-**`/post-login` works (auth only — no repo content leaves the machine):**
-- [ ] Run `/post-login`. It reports one of `active` / `active-unverified` /
+**`/login` works (auth only — no repo content leaves the machine):**
+- [ ] Run `/login`. It reports one of `active` / `active-unverified` /
       `signed-out` / `rejected` and never prints a token.
 - [ ] When signed out, it points you at the dashboard and tells you to run
       `postcommit cloud login` **in your own terminal** — it must not ask you to
@@ -180,7 +180,7 @@ something to score.
 /plugin uninstall postcommit
 ```
 
-- [ ] `/post`, `/post-snooze`, and `/post-login` are gone.
+- [ ] `/post`, `/snooze`, and `/login` are gone.
 - [ ] `/hooks` no longer lists the SessionEnd / SessionStart entries — **this is
       the key one**: uninstall must remove the hooks automatically. No dangling
       nudges after removal.

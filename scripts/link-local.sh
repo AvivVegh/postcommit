@@ -23,8 +23,8 @@ SETTINGS="$CLAUDE_DIR/settings.json"
 # source_relative_to_repo   target_relative_to_claude_dir
 LINKS=(
   "commands/post.md                    commands/post.md"
-  "commands/post-snooze.md             commands/post-snooze.md"
-  "commands/post-login.md              commands/post-login.md"
+  "commands/snooze.md                  commands/snooze.md"
+  "commands/login.md                   commands/login.md"
   "skills/postcommit-extract           skills/postcommit-extract"
   "agents/post-writer.md               agents/post-writer.md"
 )

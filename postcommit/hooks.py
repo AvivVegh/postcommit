@@ -135,7 +135,7 @@ def build_nudge(rec):
         "You did post-worthy work in this repo (%s) but haven't drafted anything "
         "about it yet.\n"
         "- Run `/post %s` to turn it into 3 LinkedIn draft candidates.\n"
-        "- Or run `/post-snooze` to hush these nudges for a few days.\n"
+        "- Or run `/snooze` to hush these nudges for a few days.\n"
         "Why it flagged: %s.\n"
         "(This nudge is rate-limited to at most once per day.)"
         % (summary, window, reason_txt)
