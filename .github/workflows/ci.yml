@@ -33,18 +33,29 @@ jobs:
             python3 -m json.tool "$f" >/dev/null && echo "ok  $f" || { echo "BAD $f"; exit 1; }
           done
 
-      - name: plugin.json and pyproject.toml versions agree
+      - name: plugin.json, pyproject.toml and __init__.py versions agree
         run: |
           python3 - <<'PY'
           import json, re, sys
-          pv = json.load(open(".claude-plugin/plugin.json"))["version"]
-          text = open("pyproject.toml").read()
-          m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
-          if not m:
-              sys.exit("no version in pyproject.toml")
-          if m.group(1) != pv:
-              sys.exit("version mismatch: plugin.json %s != pyproject.toml %s" % (pv, m.group(1)))
-          print("ok: both at", pv)
+
+          # All three must match. __init__.py is what `postcommit --version` prints,
+          # and it silently drifted to 0.5.0 while the other two were at 0.6.0 —
+          # v0.6.0 shipped self-reporting the wrong version because this check only
+          # compared the first two.
+          def from_re(path, pattern):
+              m = re.search(pattern, open(path).read(), re.MULTILINE)
+              if not m:
+                  sys.exit("no version found in %s" % path)
+              return m.group(1)
+
+          versions = {
+              ".claude-plugin/plugin.json": json.load(open(".claude-plugin/plugin.json"))["version"],
+              "pyproject.toml": from_re("pyproject.toml", r'^version\s*=\s*"([^"]+)"'),
+              "postcommit/__init__.py": from_re("postcommit/__init__.py", r'^__version__\s*=\s*"([^"]+)"'),
+          }
+          if len(set(versions.values())) != 1:
+              sys.exit("version mismatch: %s" % json.dumps(versions, indent=2))
+          print("ok: all three at", next(iter(versions.values())))
           PY
 
       - name: Hook scripts referenced in hooks.json exist and are executable
