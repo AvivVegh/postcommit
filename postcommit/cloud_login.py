@@ -13,8 +13,8 @@
 `logout()` deletes that credentials file.
 
 Everything here is stdlib-only (http.server / secrets / webbrowser): the login
-flow needs no third-party deps, so `postcommit-cloud-mcp login` works even when
-the `[cloud]`/`mcp` extra isn't installed. Tokens only ever arrive in the POST
+flow needs no third-party deps, so `postcommit cloud login` works even when the
+`[cloud]` extra isn't installed. Tokens only ever arrive in the POST
 *body*, never a URL, and the server binds 127.0.0.1 only — never 0.0.0.0.
 """
 
@@ -115,7 +115,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
             "expires_at": time.time() + expires_in,
             "api_key": _field(payload, "apiKey", "api_key"),
         }
-        _write_credentials(self.server.creds_path, creds)
+        cloud_auth.write_credentials(self.server.creds_path, creds)
 
         self._respond(200, {"ok": True})
         self.server.result = creds
@@ -141,19 +141,6 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
         self.wfile.write(encoded)
-
-
-def _write_credentials(path, data):
-    """Write credentials.json and tighten it to 0o600 (holds refresh/id tokens)."""
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
 
 
 def _build_server(creds_path, expected_state, allow_origin):
@@ -321,7 +308,7 @@ def login_paste(blob=None, creds_path=None, input_fn=None):
             raise LoginError("no token provided") from exc
 
     creds = _decode_bundle(blob)
-    _write_credentials(creds_path, creds)
+    cloud_auth.write_credentials(creds_path, creds)
     print(_identity_line(creds.get("id_token") or ""))
     print("Credentials written to %s" % creds_path)
     return creds

@@ -29,13 +29,9 @@ import os
 DEFAULT_API_URL = "https://2nrclbhwl2.execute-api.us-east-1.amazonaws.com"
 
 # Production dashboard base URL, whose /cli-auth page hands tokens back to the
-# CLI loopback server during `postcommit-cloud-mcp login`. Override with
+# CLI loopback server during `postcommit cloud login --browser`. Override with
 # POSTCOMMIT_DASHBOARD_URL for local development.
 DEFAULT_DASHBOARD_URL = "https://platform.postcommit.dev"
-
-
-class ConfigError(Exception):
-    """A required cloud config value is missing or malformed."""
 
 
 def api_url():

@@ -26,27 +26,21 @@ Homepage = "https://github.com/AvivVegh/postcommit"
 Repository = "https://github.com/AvivVegh/postcommit"
 
 [project.optional-dependencies]
-# The MCP server (postcommit-mcp) needs the reference MCP SDK, which requires
-# Python >=3.10. Gated with a marker so the dependency-free core still installs
-# on 3.9; on 3.9 the extra resolves to nothing and postcommit-mcp prints an
-# install hint instead of running.
-mcp = ["mcp>=1.2; python_version >= '3.10'"]
-# The cloud MCP server (postcommit-cloud-mcp) is a *separate*, network-touching
-# server; it needs the same MCP SDK as [mcp] (Python >=3.10). The core stays
-# stdlib-only — the cloud REST client/auth are stdlib and install without this.
+# The cloud MCP server (postcommit-cloud-mcp) is the one network-touching
+# surface; it needs the reference MCP SDK, which requires Python >=3.10. Gated
+# with a marker so the dependency-free core still installs on 3.9; there the
+# extra resolves to nothing and the server prints an install hint instead of
+# running. The core stays stdlib-only — the cloud REST client/auth are stdlib
+# and install without this.
 cloud = ["mcp>=1.2; python_version >= '3.10'"]
-dev = ["ruff>=0.6", "pyright>=1.1.380", "bandit>=1.7"]
+dev = ["ruff>=0.6", "bandit>=1.7"]
 
 [project.scripts]
 postcommit = "postcommit.__main__:main"
-postcommit-mcp = "postcommit.serve:main"
 postcommit-cloud-mcp = "postcommit.serve_cloud:main"
 
 [tool.setuptools.packages.find]
 include = ["postcommit*"]
-
-[tool.setuptools.package-data]
-postcommit = ["data/*.md"]
 
 [tool.ruff]
 target-version = "py39"
@@ -58,11 +52,6 @@ line-length = 100
 # was ported from — consistency beats a mechanical f-string migration.
 select = ["E", "F", "I", "B"]
 ignore = ["E501"]  # line length is enforced by the formatter, not the linter
-
-[tool.pyright]
-include = ["postcommit"]
-pythonVersion = "3.9"
-typeCheckingMode = "basic"
 
 [tool.bandit]
 # The core shells out to git with fixed argv lists (never shell=True) and reads

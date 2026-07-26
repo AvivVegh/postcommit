@@ -18,28 +18,26 @@ MAX_TRANSCRIPT_LINES = 8000  # cap work so the hook stays cheap on huge sessions
 IDLE_GAP_SECONDS = 15 * 60   # a gap longer than this counts as idle, not work
 
 # git's well-known empty-tree object — diff against it to size a root commit.
-_EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-
-_META_PREFIXES = (
-    "<local-command-caveat>",
-    "<command-name>",
-    "<local-command-stdout>",
-    "<system-reminder>",
-)
 _STORY_KEYWORDS = (
     "bug", "error", "crash", "fail", "broke", "broken", "fix", "fixed",
     "refactor", "race", "deadlock", "timeout", "leak", "slow", "regression",
     "flaky", "deploy", "ship", "shipped", "root cause", "stack trace",
     "segfault", "panic", "exception", "null", "undefined", "stuck",
 )
-_EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 
 # --- transcript signals -----------------------------------------------------
 
 
 def parse_transcript(path):
-    """Extract cheap signals from a session JSONL. Returns a dict of counts."""
+    """Extract cheap signals from a session JSONL. Returns a dict of counts.
+
+    `extract.distill_session` walks the same records, but the two are kept
+    separate on purpose: this one runs inside a SessionEnd hook, so it caps at
+    MAX_TRANSCRIPT_LINES and only counts; the extractor is uncapped and builds
+    narrative. Merging them would tie the cheap path to the thorough one. The
+    record vocabulary they share lives in `state` (META_PREFIXES, EDIT_TOOLS).
+    """
     sig = {
         "n_user_prompts": 0,
         "n_edits": 0,
@@ -92,7 +90,7 @@ def parse_transcript(path):
                     if (
                         isinstance(content, str)
                         and not rec.get("isMeta")
-                        and not content.lstrip().startswith(_META_PREFIXES)
+                        and not content.lstrip().startswith(st.META_PREFIXES)
                     ):
                         sig["n_user_prompts"] += 1
                         low = content.lower()
@@ -105,7 +103,7 @@ def parse_transcript(path):
                         if (
                             isinstance(block, dict)
                             and block.get("type") == "tool_use"
-                            and block.get("name") in _EDIT_TOOLS
+                            and block.get("name") in st.EDIT_TOOLS
                         ):
                             sig["n_edits"] += 1
     except OSError:
@@ -138,7 +136,7 @@ def git_signals(cwd, last_posted_head):
         # inside the day, diff against the empty tree instead.
         base = (st.git(cwd, "rev-list", "-1", "--before=1 day ago", "HEAD")
                 or "").strip()
-        rng = "%s..HEAD" % (base or _EMPTY_TREE)
+        rng = "%s..HEAD" % (base or st.EMPTY_TREE)
         diffstat = st.git(cwd, "diff", "--shortstat", rng)
 
     if log:

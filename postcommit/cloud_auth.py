@@ -45,6 +45,24 @@ def credentials_path():
     return os.path.join(os.path.expanduser("~"), ".postcommit", "credentials.json")
 
 
+def write_credentials(path, data):
+    """Write credentials.json and tighten it to 0o600 (holds refresh/id tokens).
+
+    Shared by the login flows in `cloud_login` and the refresh path in
+    `CredentialProvider` — the 0o600 chmod is the whole point, so it lives in
+    exactly one place.
+    """
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 class CredentialProvider:
     """Resolves a Firebase id_token, refreshing and caching as needed."""
 
@@ -127,16 +145,5 @@ class CredentialProvider:
                 updated["expires_at"] = time.time() + float(expires_in)
             except (TypeError, ValueError):
                 pass
-        self._write_credentials(updated)
+        write_credentials(self._path, updated)
         return id_token
-
-    def _write_credentials(self, data):
-        directory = os.path.dirname(self._path)
-        os.makedirs(directory, exist_ok=True)
-        # Write then tighten perms to 600 — this file holds refresh/id tokens.
-        with open(self._path, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, indent=2)
-        try:
-            os.chmod(self._path, 0o600)
-        except OSError:
-            pass

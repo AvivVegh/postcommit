@@ -196,6 +196,11 @@ def write_watermark(cwd, wm):
 
 # --- git helpers ------------------------------------------------------------
 
+# git's canonical empty-tree hash. Diffing against it yields "everything since
+# the beginning", which is what both the extractor and the scorer need on a
+# repo whose first commit is inside the window.
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
 
 def git(cwd, *args):
     """Run a git command in cwd; return stripped stdout, or None on error."""
@@ -260,6 +265,27 @@ def parse_shortstat(text):
     return files, insertions, deletions
 
 
+# --- transcript constants ---------------------------------------------------
+
+# Both `scoring.parse_transcript` (cheap, capped, produces signals) and
+# `extract.distill_session` (thorough, uncapped, produces narrative) walk the
+# same Claude Code JSONL records. The walks are deliberately separate — the hook
+# must stay cheap — but the record vocabulary they filter on is one thing, so it
+# is tracked here rather than in both.
+
+# Wrapper tags Claude Code injects into user records. A record whose text starts
+# with one of these is harness plumbing, not something the human typed.
+META_PREFIXES = (
+    "<local-command-caveat>",
+    "<command-name>",
+    "<local-command-stdout>",
+    "<system-reminder>",
+)
+
+# Tool names that mean the assistant actually changed a file.
+EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+
+
 # --- state verbs (backing the `postcommit state ...` CLI) -------------------
 
 
@@ -311,26 +337,6 @@ def state_mark_posted(cwd):
     except FileNotFoundError:
         pass
     print("marked posted at HEAD", head)
-    return 0
-
-
-def state_stage_fake(cwd):
-    rec = {
-        "created_at": iso(now_utc()),
-        "session_id": "fake-session",
-        "cwd": cwd,
-        "repo": os.path.basename(cwd),
-        "branch": git(cwd, "rev-parse", "--abbrev-ref", "HEAD") or "?",
-        "head": git_head(cwd),
-        "score": 8,
-        "verdict": "post-worthy",
-        "reasons": ["fake recommendation staged for testing"],
-        "window_hint": "1d",
-        "summary_line": "fake: 2 commits, 1 session, 5 files touched",
-    }
-    ensure_repo_dir(cwd)
-    write_json(recommendation_path(cwd), rec)
-    print("staged fake recommendation at", recommendation_path(cwd))
     return 0
 
 

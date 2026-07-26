@@ -1,11 +1,10 @@
 """postcommit — command-line entry point.
 
     postcommit extract <window>          emit a work bundle to stdout
-    postcommit state [show|snooze [N]|unsnooze|mark-posted|stage-fake|drafts-dir|reset]
+    postcommit state [show|snooze [N]|unsnooze|mark-posted|drafts-dir|reset]
     postcommit cloud [status|login [TOKEN] [--browser]|logout]
     postcommit hook session-end          run the SessionEnd logic (payload on stdin)
     postcommit hook session-start        run the SessionStart logic (payload on stdin)
-    postcommit install [--claude]        write the skill adapter into ~/.claude
     postcommit --version
 
 The `hook` verbs read the Claude Code hook payload as JSON on stdin. They are
@@ -56,8 +55,6 @@ def cmd_state(args):
         return st.state_unsnooze(cwd)
     if verb == "mark-posted":
         return st.state_mark_posted(cwd)
-    if verb == "stage-fake":
-        return st.state_stage_fake(cwd)
     if verb == "drafts-dir":
         return st.state_drafts_dir(cwd)
     if verb == "reset":
@@ -122,11 +119,6 @@ def cmd_cloud(args):
     return 2
 
 
-def cmd_install(args):
-    from . import install
-    return install.install(claude=args.claude or not args.no_claude)
-
-
 def build_parser():
     p = argparse.ArgumentParser(prog="postcommit", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -150,21 +142,13 @@ def build_parser():
     ps = sub.add_parser("state", help="inspect/adjust per-repo nudge state")
     ps.add_argument("verb", nargs="?", default="show",
                     choices=["show", "snooze", "unsnooze", "mark-posted",
-                             "stage-fake", "drafts-dir", "reset"])
+                             "drafts-dir", "reset"])
     ps.add_argument("days", nargs="?", default=None, help="days for `snooze`")
     ps.set_defaults(func=cmd_state)
 
     ph = sub.add_parser("hook", help="run hook logic (payload on stdin)")
     ph.add_argument("event", choices=["session-end", "session-start"])
     ph.set_defaults(func=cmd_hook)
-
-    pi = sub.add_parser("install", help="write the skill adapter into a host")
-    pi_host = pi.add_mutually_exclusive_group()
-    pi_host.add_argument("--claude", action="store_true",
-                         help="install into ~/.claude (default)")
-    pi_host.add_argument("--no-claude", action="store_true",
-                         help="skip the Claude Code install")
-    pi.set_defaults(func=cmd_install)
 
     return p
 

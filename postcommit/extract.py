@@ -21,9 +21,6 @@ from datetime import datetime, timedelta, timezone
 
 from . import state as st
 
-# git's well-known empty-tree object — diff against it to show a root commit.
-EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-
 DIFF_CHAR_CAP = 40_000
 MAX_PROMPT_CHARS = 280
 MAX_LINE_CHARS = 200
@@ -102,7 +99,7 @@ def _time_window(cwd, cutoff, label):
     # exactly the committed work inside the window. If nothing precedes the
     # window, diff against the empty tree so a repo's first commit still shows.
     base = st.git(cwd, "rev-list", "-1", "--before", since, "HEAD")
-    diff_range = ("%s..HEAD" % base) if base else ("%s..HEAD" % EMPTY_TREE)
+    diff_range = ("%s..HEAD" % base) if base else ("%s..HEAD" % st.EMPTY_TREE)
     return {"cutoff": cutoff, "log_args": ["--since", since],
             "diff_range": diff_range, "label": label}
 
@@ -280,13 +277,6 @@ def cap_diff(diff, limit=DIFF_CHAR_CAP):
 
 # --- Step 3+4: locate and parse session transcripts ------------------------
 
-_META_PREFIXES = (
-    "<local-command-caveat>",
-    "<command-name>",
-    "<local-command-stdout>",
-    "<system-reminder>",
-)
-_EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 
 
 def _dir_is_for_cwd(cand, abscwd):
@@ -386,7 +376,7 @@ def _tool_summary(name, inp):
     detail = ""
     if name == "Bash":
         detail = _collapse(inp.get("command", "")).split(" && ")[0]
-    elif name in _EDIT_TOOLS:
+    elif name in st.EDIT_TOOLS:
         detail = inp.get("file_path") or inp.get("notebook_path") or ""
     elif name == "Read":
         detail = inp.get("file_path") or inp.get("path") or ""
@@ -398,7 +388,13 @@ def _tool_summary(name, inp):
 
 
 def distill_session(path, cutoff):
-    """Turn one session JSONL into a scannable narrative block, or None."""
+    """Turn one session JSONL into a scannable narrative block, or None.
+
+    `scoring.parse_transcript` walks the same records but stays deliberately
+    separate — it runs in a hook and only counts, this builds narrative and is
+    uncapped. Shared record vocabulary lives in `state` (META_PREFIXES,
+    EDIT_TOOLS).
+    """
     lines = []
     first_ts = last_ts = None
     cut = cutoff
@@ -426,7 +422,7 @@ def distill_session(path, cutoff):
                     if (
                         isinstance(content, str)
                         and not rec.get("isMeta")
-                        and not content.lstrip().startswith(_META_PREFIXES)
+                        and not content.lstrip().startswith(st.META_PREFIXES)
                     ):
                         text = _collapse(scrub_text(content))[:MAX_PROMPT_CHARS]
                         if text:
