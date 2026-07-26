@@ -59,6 +59,14 @@ class Dispatch(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("snoozed", out)
 
+    def test_state_drafts_dir_prints_a_usable_path(self):
+        """/post reads this path off stdout, so it must be the only thing on it."""
+        rc, out, _ = _capture(["state", "drafts-dir"])
+        self.assertEqual(rc, 0)
+        path = out.strip()
+        self.assertTrue(os.path.isdir(path))
+        self.assertEqual(os.path.basename(path), "drafts")
+
     def test_no_args_prints_help(self):
         rc, out, _ = _capture([])
         self.assertEqual(rc, 0)

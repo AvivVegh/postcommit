@@ -232,7 +232,7 @@ def summary_line(gsig, tx):
 
 def fresh_draft_since(cwd, first_ts):
     """True if a /post draft was written during this session."""
-    drafts_dir = os.path.join(cwd, ".postcommit", "drafts")
+    drafts_dir = st.drafts_dir(cwd)
     if not os.path.isdir(drafts_dir) or first_ts is None:
         return False
     cutoff = first_ts.timestamp()
