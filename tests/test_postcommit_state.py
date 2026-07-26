@@ -194,5 +194,64 @@ class StateVerbs(unittest.TestCase):
         self.assertIsNone(st.read_json(st.watermark_path(self.repo), None))
 
 
+class SelfIgnoringRepoDir(unittest.TestCase):
+    """`.postcommit/` must stay invisible to git without the user's help.
+
+    Drafts are distilled from session transcripts, so the guarantee that matters
+    is the end-to-end one: after postcommit writes state into a real repo,
+    `git status` is still clean.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = init_repo(os.path.join(self.tmp.name, "repo"))
+        commit(self.repo, "a.txt", "one\n", "first")
+        stack = contextlib.ExitStack()
+        stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+        stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+        self.addCleanup(stack.close)
+
+    def _gitignore(self):
+        return os.path.join(st.repo_dir(self.repo), ".gitignore")
+
+    def test_ensure_creates_dir_and_gitignore(self):
+        st.ensure_repo_dir(self.repo)
+        self.assertTrue(os.path.isdir(st.repo_dir(self.repo)))
+        with open(self._gitignore(), encoding="utf-8") as fh:
+            self.assertIn("*", fh.read().splitlines())
+
+    def test_git_status_stays_clean_after_writing_state(self):
+        st.state_stage_fake(self.repo)
+        st.state_snooze(self.repo, "1")
+        self.assertEqual(st.git(self.repo, "status", "--porcelain"), "")
+
+    def test_git_status_stays_clean_with_a_draft_present(self):
+        self.assertEqual(st.state_drafts_dir(self.repo), 0)
+        draft = os.path.join(st.drafts_dir(self.repo), "2026-07-04T20-15-33Z.md")
+        with open(draft, "w", encoding="utf-8") as fh:
+            fh.write("# LinkedIn draft candidates\n")
+        self.assertEqual(st.git(self.repo, "status", "--porcelain"), "")
+        # ...and git agrees it is ignored, not merely untracked-and-unreported.
+        self.assertEqual(st.git(self.repo, "check-ignore", draft), draft)
+
+    def test_existing_gitignore_is_left_alone(self):
+        st.ensure_repo_dir(self.repo)
+        with open(self._gitignore(), "w", encoding="utf-8") as fh:
+            fh.write("!keep.md\n*\n")
+        st.ensure_repo_dir(self.repo)
+        with open(self._gitignore(), encoding="utf-8") as fh:
+            self.assertIn("!keep.md", fh.read())
+
+    def test_ensure_is_idempotent_and_survives_unwritable_parent(self):
+        self.assertEqual(st.ensure_repo_dir(self.repo), st.ensure_repo_dir(self.repo))
+        # A read-only repo must not raise — hooks swallow nothing above this.
+        missing = os.path.join(self.tmp.name, "nope", "deeper")
+        os.makedirs(missing)
+        os.chmod(missing, 0o500)
+        self.addCleanup(os.chmod, missing, 0o700)
+        st.ensure_repo_dir(missing)  # no exception
+
+
 if __name__ == "__main__":
     unittest.main()

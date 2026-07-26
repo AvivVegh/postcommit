@@ -10,7 +10,9 @@ State lives in three places:
   <repo>/.postcommit/state/watermark.json        per-repo "what's processed/posted"
   ~/.postcommit/nudge-state.json                 global once-per-day cooldown
 
-The `.postcommit/` dir is gitignored, so per-repo state never leaks.
+The per-repo `.postcommit/` dir ignores itself (see `ensure_repo_dir`), so state
+and drafts never leak into the user's git history and they never have to add an
+ignore rule of their own.
 """
 
 import json
@@ -59,8 +61,16 @@ def today_local():
 # --- paths ------------------------------------------------------------------
 
 
+def repo_dir(cwd):
+    return os.path.join(cwd, ".postcommit")
+
+
 def state_dir(cwd):
-    return os.path.join(cwd, ".postcommit", "state")
+    return os.path.join(repo_dir(cwd), "state")
+
+
+def drafts_dir(cwd):
+    return os.path.join(repo_dir(cwd), "drafts")
 
 
 def recommendation_path(cwd):
@@ -90,6 +100,44 @@ def launcher_path():
     plugin-bundled package through this stable location instead.
     """
     return os.path.join(bin_dir(), "postcommit")
+
+
+# --- the self-ignoring repo dir ---------------------------------------------
+
+GITIGNORE_BODY = (
+    "# Created automatically by postcommit.\n"
+    "# Everything here is local-only: drafts and nudge state, derived from your\n"
+    "# git history and Claude Code sessions. Ignoring `*` (including this file)\n"
+    "# keeps it out of git without touching your own .gitignore.\n"
+    "# To commit a draft anyway: git add -f .postcommit/drafts/<file>.md\n"
+    "*\n"
+)
+
+
+def ensure_repo_dir(cwd):
+    """Create <cwd>/.postcommit/ and make it ignore itself. Returns the path.
+
+    The drafts in here are distilled from session transcripts, so "the user has
+    to remember a .gitignore rule" is a privacy hole, not just an annoyance. A
+    `.gitignore` containing `*` makes the whole tree — the ignore file included —
+    invisible to git with no action from the user; git honours ignore files
+    whether or not they are tracked. Same trick as .pytest_cache/ and
+    .ruff_cache/.
+
+    Best-effort: a failure here must never break a hook or /post, so OSError is
+    swallowed. An existing .gitignore is left alone — the user may have edited it
+    to un-ignore something deliberately.
+    """
+    d = repo_dir(cwd)
+    try:
+        os.makedirs(d, exist_ok=True)
+        gitignore = os.path.join(d, ".gitignore")
+        if not os.path.exists(gitignore):
+            with open(gitignore, "w", encoding="utf-8") as fh:
+                fh.write(GITIGNORE_BODY)
+    except OSError:
+        pass
+    return d
 
 
 # --- json io ----------------------------------------------------------------
@@ -142,6 +190,7 @@ def read_watermark(cwd):
 
 
 def write_watermark(cwd, wm):
+    ensure_repo_dir(cwd)
     write_json(watermark_path(cwd), wm)
 
 
@@ -279,8 +328,27 @@ def state_stage_fake(cwd):
         "window_hint": "1d",
         "summary_line": "fake: 2 commits, 1 session, 5 files touched",
     }
+    ensure_repo_dir(cwd)
     write_json(recommendation_path(cwd), rec)
     print("staged fake recommendation at", recommendation_path(cwd))
+    return 0
+
+
+def state_drafts_dir(cwd):
+    """Create the drafts dir (self-ignoring) and print it. Used by /post.
+
+    The command layer used to `mkdir -p .postcommit/drafts` itself, which meant
+    a draft could land in a repo dir that had never been made self-ignoring.
+    Routing it through here keeps that guarantee in one place.
+    """
+    ensure_repo_dir(cwd)
+    d = drafts_dir(cwd)
+    try:
+        os.makedirs(d, exist_ok=True)
+    except OSError as exc:
+        print("could not create %s: %s" % (d, exc), file=sys.stderr)
+        return 1
+    print(d)
     return 0
 
 

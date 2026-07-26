@@ -83,6 +83,13 @@ lesson**, and a **tiny tool share** — saved to `.postcommit/drafts/<UTC-ISO>.m
 opened in your editor. The angles are fixed on purpose so you can compare output
 apples-to-apples over time.
 
+You do **not** need to add anything to your `.gitignore`. postcommit creates
+`.postcommit/` with a `.gitignore` of its own containing `*`, so the directory —
+drafts, state, and the ignore file itself — is invisible to git from the moment it
+is created. Your drafts are distilled from session transcripts, and this way they
+cannot be committed by accident. To commit one on purpose:
+`git add -f .postcommit/drafts/<file>.md`.
+
 ### Is it actually better?
 
 The built-in honesty check:

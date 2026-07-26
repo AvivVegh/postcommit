@@ -84,7 +84,9 @@ Two layers: **deterministic code** (the `postcommit` package) and **prompt/taste
   from the bundle. Mirrors `postcommit/data/skill.md`.
 - **`commands/post.md` — the dispatcher (prompt).** Thin. Parses the window argument,
   invokes the extract skill, hands the bundle to the subagent, saves the result to
-  `.postcommit/drafts/<UTC-ISO>.md`, and opens it. No creative or extraction logic.
+  `.postcommit/drafts/<UTC-ISO>.md` (path obtained from `postcommit state
+  drafts-dir`, never `mkdir`'d by hand), and opens it. No creative or extraction
+  logic.
 - **`agents/post-writer.md` — the writer (prompt).** Creative and opinionated. This is
   the crown jewel — the file that decides whether a draft reads human or like slop.
   **Iterate here first** when improving output quality.
@@ -167,8 +169,13 @@ interactive install QA in `docs/smoke-test.md`.
   elsewhere.
 - **No fabrication.** The writer must never invent numbers, timings, error messages, or
   file names not present in the bundle. Preserve this rule in any edit to the writer.
-- **Generated output** lands in `.postcommit/` (git-ignored). Drafts are named by UTC
-  ISO timestamp with colons replaced by dashes for filesystem safety.
+- **Generated output** lands in `.postcommit/`, which **ignores itself**: every code
+  path that creates it goes through `state.ensure_repo_dir`, which drops a
+  `.gitignore` containing `*` (the same trick as `.pytest_cache/`). The user never
+  adds an ignore rule, and transcript-derived drafts can't be committed by accident.
+  Never `mkdir` that directory directly — route through `ensure_repo_dir` (or, from
+  a prompt file, `postcommit state drafts-dir`) or you lose the guarantee. Drafts are
+  named by UTC ISO timestamp with colons replaced by dashes for filesystem safety.
 - **Conventional commits and branches.** Both carry a type prefix — one of `feat`,
   `fix`, `add`, `docs`, `chore`, `refactor`, `ci`. Commit subjects use
   `type(scope): summary` (scope optional, imperative, no trailing period), e.g.

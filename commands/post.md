@@ -32,7 +32,14 @@ Capture the subagent's full response verbatim.
 
 ## 3. Save to disk
 
-Create `.postcommit/drafts/` in the repo root if it doesn't exist. Write the drafts to `.postcommit/drafts/<UTC-ISO-8601>.md` (e.g. `2026-07-04T20-15-33Z.md` — colons replaced with dashes for filesystem safety).
+Get the drafts directory from the CLI — do **not** `mkdir` it yourself. The CLI creates it and makes `.postcommit/` self-ignoring (a `.gitignore` containing `*`), so drafts can never be committed by accident:
+
+```
+( command -v postcommit >/dev/null 2>&1 && postcommit state drafts-dir ) \
+  || ~/.postcommit/bin/postcommit state drafts-dir
+```
+
+It prints the absolute path. Write the drafts to `<that path>/<UTC-ISO-8601>.md` (e.g. `2026-07-04T20-15-33Z.md` — colons replaced with dashes for filesystem safety).
 
 The file's contents must be:
 

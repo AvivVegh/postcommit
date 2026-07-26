@@ -1,7 +1,7 @@
 """postcommit — command-line entry point.
 
     postcommit extract <window>          emit a work bundle to stdout
-    postcommit state [show|snooze [N]|unsnooze|mark-posted|stage-fake|reset]
+    postcommit state [show|snooze [N]|unsnooze|mark-posted|stage-fake|drafts-dir|reset]
     postcommit hook session-end          run the SessionEnd logic (payload on stdin)
     postcommit hook session-start        run the SessionStart logic (payload on stdin)
     postcommit install [--claude]        write the skill adapter into ~/.claude
@@ -57,6 +57,8 @@ def cmd_state(args):
         return st.state_mark_posted(cwd)
     if verb == "stage-fake":
         return st.state_stage_fake(cwd)
+    if verb == "drafts-dir":
+        return st.state_drafts_dir(cwd)
     if verb == "reset":
         return st.state_reset(cwd)
     print("unknown state verb: %s" % verb, file=sys.stderr)
@@ -103,7 +105,7 @@ def build_parser():
     ps = sub.add_parser("state", help="inspect/adjust per-repo nudge state")
     ps.add_argument("verb", nargs="?", default="show",
                     choices=["show", "snooze", "unsnooze", "mark-posted",
-                             "stage-fake", "reset"])
+                             "stage-fake", "drafts-dir", "reset"])
     ps.add_argument("days", nargs="?", default=None, help="days for `snooze`")
     ps.set_defaults(func=cmd_state)
 

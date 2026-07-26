@@ -151,6 +151,10 @@ something to score.
 - [ ] `settings.json` still untouched (nothing to clean up there).
 - [ ] Per-repo `.postcommit/` state and `~/.postcommit/` are the user's data and
       are expected to remain (document this, or remove manually if testing clean).
+- [ ] In a test repo that has **no** `.postcommit` rule in its own `.gitignore`,
+      `git status --porcelain` is clean after `/post` — `.postcommit/.gitignore`
+      exists and contains `*`, and `git check-ignore .postcommit/drafts/<file>.md`
+      echoes the path back.
 
 ---
 

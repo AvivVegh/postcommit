@@ -112,6 +112,7 @@ def handle_session_end(payload):
                 "window_hint": gsig["window_hint"],
                 "summary_line": scoring.summary_line(gsig, tx),
             }
+            st.ensure_repo_dir(cwd)
             st.write_json(st.recommendation_path(cwd), rec)
         # if not post-worthy, we leave any prior pending rec untouched
 
