@@ -182,6 +182,9 @@ class Timeout(LoginBase):
                     timeout=0.3, open_browser=lambda _url: True,
                     creds_path=self.creds)
         self.assertIn("timed out", str(cm.exception))
+        # The retry hint must name the main-CLI verb: `postcommit-cloud-mcp` is
+        # a console script the plugin-bundled launcher cannot reach.
+        self.assertIn("postcommit cloud login --browser", str(cm.exception))
         self.assertFalse(os.path.exists(self.creds))
 
 

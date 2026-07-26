@@ -210,7 +210,8 @@ def login(dashboard_url=None, timeout=DEFAULT_TIMEOUT_SECONDS,
     if not server.done or server.result is None:
         raise LoginError(
             "timed out after %ds waiting for the browser authorization. "
-            "Re-run `postcommit-cloud-mcp login` and complete the Authorize step."
+            "Re-run `postcommit cloud login --browser` and complete the "
+            "Authorize step."
             % int(timeout))
 
     print(_identity_line(server.result["id_token"]))
