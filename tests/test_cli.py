@@ -111,7 +111,7 @@ class CloudVerb(unittest.TestCase):
         self.assertEqual(cm.exception.code, 2)
 
     def test_status_reports_signed_out_without_credentials(self):
-        """Exit 1 = not usable, so /post-login can branch without parsing."""
+        """Exit 1 = not usable, so /login can branch without parsing."""
         home = tempfile.mkdtemp()
         old = os.environ.get("HOME")
         os.environ["HOME"] = home

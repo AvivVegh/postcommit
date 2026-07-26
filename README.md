@@ -47,7 +47,7 @@ One step. This repo is its own plugin marketplace:
 /plugin install postcommit
 ```
 
-That registers the `/post`, `/post-snooze`, and `/post-login` commands, the extract
+That registers the `/post`, `/snooze`, and `/login` commands, the extract
 skill, the post-writer subagent, and the two hooks. Uninstalling removes all of them automatically
 — no manual `settings.json` editing. Restart Claude Code once after installing so the
 `SessionStart` hook can wire up the bundled CLI, then `/post` just works.
@@ -112,7 +112,7 @@ ambient — both instant, deterministic, and local (no model calls):
 Controlling nudges:
 
 - `/post` acts on the recommendation and clears it.
-- `/post-snooze [days]` hushes nudges for this repo (default 3 days).
+- `/snooze [days]` hushes nudges for this repo (default 3 days).
 - `postcommit state show` inspects all state; `snooze` / `unsnooze` / `mark-posted` / `reset` are also available as `postcommit state <verb>`.
 
 ## Cloud (optional): schedule & publish to LinkedIn
@@ -129,7 +129,7 @@ uv tool install 'postcommit[cloud]'
 postcommit cloud login         # paste a token from the dashboard (see below)
 ```
 
-From inside Claude Code, `/post-login` reports whether you're already signed in and,
+From inside Claude Code, `/login` reports whether you're already signed in and,
 if not, opens the dashboard and hands you the command to run. It deliberately does
 **not** take the token itself: anything pasted into the chat is written to the session
 transcript, which is exactly what postcommit reads to build work bundles. Paste in your
@@ -211,8 +211,8 @@ postcommit/                         # the package — all deterministic logic
   cloud_login.py                    #   `postcommit cloud` status/login/logout (stdlib)
   serve_cloud.py                    #   `postcommit-cloud-mcp` — networked MCP server ([cloud] extra)
 commands/post.md                    # /post <window> — the manual trigger
-commands/post-snooze.md             # /post-snooze [days] — hush the nudge
-commands/post-login.md              # /post-login — cloud auth (the only networked command)
+commands/snooze.md                  # /snooze [days] — hush the nudge
+commands/login.md                   # /login — cloud auth (the only networked command)
 skills/postcommit-extract/SKILL.md  # the thin extract skill adapter
 agents/post-writer.md               # the writer subagent — the LinkedIn taste layer
 hooks/                              # hooks.json + the two thin shims that call the CLI

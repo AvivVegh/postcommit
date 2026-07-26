@@ -333,7 +333,7 @@ def status(creds_path=None, provider=None, client=None):
       rejected          a token was obtained and the API refused it     -> 1
 
     Exit code 0 means "usable", so a caller can branch on it without parsing. The
-    machine-readable `status: <state>` line is the contract for the /post-login
+    machine-readable `status: <state>` line is the contract for the /login
     command; keep its wording stable.
     """
     creds_path = creds_path or cloud_auth.credentials_path()
