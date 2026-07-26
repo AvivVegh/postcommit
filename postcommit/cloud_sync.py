@@ -197,7 +197,7 @@ def cmd_sync(cwd, dry_run=False):
         pushed, skipped, failed, already = sync(cwd)
     except AuthRejected as exc:
         print("Cloud rejected the credentials: %s" % exc, file=sys.stderr)
-        print("Run /post-login (or `postcommit cloud login --browser`) and retry.",
+        print("Run /login (or `postcommit cloud login --browser`) and retry.",
               file=sys.stderr)
         return 1
 

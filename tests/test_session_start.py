@@ -22,7 +22,7 @@ class BuildNudge(unittest.TestCase):
         self.assertIn("/post main..HEAD", text)
         self.assertIn("2 commits, 3 files touched", text)
         self.assertIn("debugging-story signal (bug)", text)
-        self.assertIn("/post-snooze", text)
+        self.assertIn("/snooze", text)
 
     def test_falls_back_when_fields_missing(self):
         text = ss.build_nudge({})

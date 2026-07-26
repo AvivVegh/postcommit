@@ -5,7 +5,7 @@ argument-hint: ""
 
 The user wants to upload the LinkedIn draft candidates saved in this repo to **postcommit cloud**, where they can be scheduled and published.
 
-This is the only command besides `/post-login` that sends anything over the network, and unlike `/post-login` it sends *content*. Treat the confirmation step in §3 as mandatory.
+This is the only command besides `/login` that sends anything over the network, and unlike `/login` it sends *content*. Treat the confirmation step in §3 as mandatory.
 
 ## 1. Check they're signed in
 
@@ -23,7 +23,7 @@ Resolve the CLI in this order and use the first that runs — call it `<CLI>` an
 | `status:` | What to do |
 |---|---|
 | `active` / `active-unverified` | Go to step 2. |
-| `signed-out` / `rejected` | Stop. Tell them to run `/post-login` first, and nothing else. Do not attempt the sync. |
+| `signed-out` / `rejected` | Stop. Tell them to run `/login` first, and nothing else. Do not attempt the sync. |
 
 ## 2. Show the plan
 
@@ -60,7 +60,7 @@ One or two lines: how many were pushed, skipped, or failed, and where to review 
 Common outcomes worth relaying verbatim:
 
 - A candidate skipped for exceeding the 3000-character cap — say which draft, so they can trim it.
-- A run aborted because the cloud rejected the credentials — tell them to run `/post-login` and retry.
+- A run aborted because the cloud rejected the credentials — tell them to run `/login` and retry.
 
 ## Rules
 

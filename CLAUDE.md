@@ -39,8 +39,8 @@ postcommit/                         # the package — all deterministic logic li
 .claude-plugin/plugin.json          # plugin manifest (name, version — kept in sync with pyproject)
 .claude-plugin/marketplace.json     # self-hosted marketplace listing this plugin
 commands/post.md                    # /post <window> — the manual trigger (thin dispatcher)
-commands/post-snooze.md             # /post-snooze [days] — hush the nudge
-commands/post-login.md              # /post-login — cloud auth (networked: auth only)
+commands/snooze.md                  # /snooze [days] — hush the nudge
+commands/login.md                   # /login — cloud auth (networked: auth only)
 commands/sync.md                    # /sync — push saved drafts to the cloud (networked: content)
 skills/postcommit-extract/SKILL.md  # the thin extract skill adapter (single source of truth)
 agents/post-writer.md               # the writer subagent — LinkedIn taste/template layer
@@ -178,7 +178,7 @@ interactive install QA in `docs/smoke-test.md`.
   `~/.postcommit/credentials.json`), and `cloud_login.py` is what populates that file —
   do not add throwaway auth scaffolding elsewhere. Anything writing credentials goes
   through `cloud_auth.write_credentials`, which is what applies the 0o600 chmod.
-- **Two networked commands, and only two.** `commands/post-login.md` (`/post-login`)
+- **Two networked commands, and only two.** `commands/login.md` (`/login`)
   carries *authentication only* — never repo content. `commands/sync.md` (`/sync`) is
   the only surface that sends *content*, and only draft candidates the user has
   already seen and confirmed. Everything else — `/post`, the extract skill, the hooks
@@ -205,7 +205,7 @@ interactive install QA in `docs/smoke-test.md`.
   `postcommit-cloud-mcp`.** The launcher the SessionStart hook writes runs `python3 -m
   postcommit`, so anything the model-run commands must reach has to live on that
   parser; a verb only on the separate `postcommit-cloud-mcp` console script is
-  unreachable from `/post-login` and forces a fragile hunt for a source checkout. Keep
+  unreachable from `/login` and forces a fragile hunt for a source checkout. Keep
   new model-facing verbs on `__main__.py`. `cloud_login` is stdlib-only, so this costs
   the dependency-free core nothing.
 - **`status` answers "can I use the cloud", not "has the id_token expired".** The
@@ -217,7 +217,7 @@ interactive install QA in `docs/smoke-test.md`.
 - **The token must never enter the chat.** The dashboard blob is base64(JSON) holding a
   long-lived `refresh_token`. Anything in the chat lands in the session transcript,
   which `postcommit extract` reads — so a pasted token can reach a work bundle, a
-  draft, and a published post. `/post-login` therefore sends the user to their *own*
+  draft, and a published post. `/login` therefore sends the user to their *own*
   terminal to paste, and `extract._TOKEN_RE` masks the bundle shape as a backstop.
 - **No fabrication.** The writer must never invent numbers, timings, error messages, or
   file names not present in the bundle. Preserve this rule in any edit to the writer.

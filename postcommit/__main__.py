@@ -89,7 +89,7 @@ def cmd_cloud(args):
 
     `postcommit-cloud-mcp` is a separate console script, and the launcher the
     SessionStart hook writes runs `python3 -m postcommit` — so before this existed
-    the /post-login command could not reach cloud auth through the plugin at all
+    the /login command could not reach cloud auth through the plugin at all
     and had to hunt for a source checkout. cloud_login is stdlib-only, so hanging
     these verbs here costs the dependency-free core nothing.
     """
