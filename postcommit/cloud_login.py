@@ -327,6 +327,61 @@ def login_paste(blob=None, creds_path=None, input_fn=None):
     return creds
 
 
+def status(creds_path=None, provider=None, client=None):
+    """Report auth state without ever printing the token. Returns (state, code).
+
+    "Is the token active?" is deliberately *not* the same question as "has the
+    id_token expired". The id_token lives about an hour; the refresh_token stored
+    beside it is long-lived, so an expired id_token is the normal steady state and
+    refreshes silently. Branching on expiry alone would march the user back to the
+    dashboard every hour for nothing.
+
+    Four outcomes, because the honest answer to "are you signed in" depends on
+    something only the server knows (revocation) and on being online at all:
+
+      active            a token was obtained and the API accepted it   -> 0
+      active-unverified a token was obtained; the API was unreachable   -> 0
+      signed-out        no credentials, or they cannot produce a token  -> 1
+      rejected          a token was obtained and the API refused it     -> 1
+
+    Exit code 0 means "usable", so a caller can branch on it without parsing. The
+    machine-readable `status: <state>` line is the contract for the /post-login
+    command; keep its wording stable.
+    """
+    creds_path = creds_path or cloud_auth.credentials_path()
+    provider = provider or cloud_auth.CredentialProvider(creds_path)
+
+    try:
+        id_token = provider.get_id_token()
+    except cloud_auth.AuthError as exc:
+        print("status: signed-out")
+        print(str(exc))
+        return "signed-out", 1
+
+    identity = _identity_line(id_token)
+
+    if client is None:
+        from . import cloud_client
+        client = cloud_client.CloudClient(provider=provider)
+    try:
+        client.linkedin_status()
+    except Exception as exc:  # noqa: BLE001 - any failure is classified below
+        st = getattr(exc, "status", None)
+        if st in (401, 403):
+            print("status: rejected")
+            print("%s The server refused this token — sign in again." % identity)
+            return "rejected", 1
+        # Offline, DNS failure, 5xx: we hold a refreshable token and have no
+        # evidence against it. Don't nag the user into a needless re-login.
+        print("status: active-unverified")
+        print("%s Could not reach the API to confirm (%s)." % (identity, exc))
+        return "active-unverified", 0
+
+    print("status: active")
+    print(identity)
+    return "active", 0
+
+
 def logout(creds_path=None):
     """Delete ~/.postcommit/credentials.json (a no-op if it is already absent)."""
     creds_path = creds_path or cloud_auth.credentials_path()

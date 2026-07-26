@@ -175,13 +175,24 @@ _URL_CRED_RE = re.compile(r"([a-z][a-z0-9+.\-]*://[^/\s:@]+:)[^/\s@]+@")
 # `Authorization: Bearer <token>` / a bare `Bearer <token>` — the token follows
 # whitespace, not an `=`/`:`, so it is not covered by _INLINE_SECRET_RE.
 _BEARER_RE = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]{6,}")
+# The JWT alternative must stay *before* the bare base64(JSON) one: alternation
+# is leftmost-first, so at a position starting `eyJ` the dotted JWT pattern gets
+# first refusal and consumes the whole token rather than just its header segment.
 _TOKEN_RE = re.compile(
     r"(?i)(?<![a-z0-9])("
     r"sk-[a-z0-9][a-z0-9-]{7,}"                               # OpenAI/Stripe-style
     r"|gh[pousr]_[a-z0-9]{16,}"                               # GitHub tokens
     r"|AKIA[0-9A-Z]{12,}"                                     # AWS access key id
     r"|xox[baprs]-[a-z0-9-]{8,}"                              # Slack tokens
+    r"|AIza[0-9A-Za-z_\-]{35,}"                               # Google/Firebase API key
     r"|eyJ[a-z0-9_\-]{8,}\.[a-z0-9_\-]{8,}\.[a-z0-9_\-]{6,}"  # JWT
+    # base64(JSON) credential blob — what postcommit-cloud's "copy token" button
+    # emits. It holds a refresh_token, so it is permanent account access. Being
+    # one unbroken base64 run it has no dots, so the JWT rule above misses it
+    # entirely; a user pasting it into the chat would otherwise land it in the
+    # transcript, and from there into a work bundle and a draft. `{`/`"` encodes
+    # to a leading `eyJ`, and 60+ chars keeps this off short base64 fixtures.
+    r"|eyJ[A-Za-z0-9+/_\-]{60,}={0,2}"                        # base64(JSON) blob
     r")(?![a-z0-9])")
 
 

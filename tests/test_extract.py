@@ -4,6 +4,8 @@ Covers window parsing, diff hygiene (secret masking + size cap), transcript
 distillation, and end-to-end bundle assembly against real fixture repos.
 """
 
+import base64
+import json
 import os
 import tempfile
 import unittest
@@ -259,3 +261,53 @@ class BuildBundle(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CredentialBundleMasking(unittest.TestCase):
+    """The dashboard's copy-token blob must never survive into a work bundle.
+
+    It is base64(JSON) holding a long-lived refresh_token. Being one unbroken
+    base64 run it carries no dots, so the JWT rule misses it — a user pasting it
+    into the chat would otherwise land it in the transcript, and from there into
+    a bundle, a draft, and potentially a published post.
+    """
+
+    @staticmethod
+    def _bundle():
+        payload = {
+            "id_token": "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1MSJ9.sig",
+            "refresh_token": "AMf-vBxREFRESHtokenLONGLIVEDvalue1234567890",
+            "api_key": "AIzaSyExampleFirebaseWebApiKey0000000000",
+            "expires_at": 1785040000,
+        }
+        return base64.b64encode(json.dumps(payload).encode()).decode()
+
+    def test_bare_bundle_is_masked(self):
+        blob = self._bundle()
+        self.assertNotIn(blob, ex.scrub_text(blob))
+
+    def test_bundle_after_prose_is_masked(self):
+        blob = self._bundle()
+        line = "here is my token %s thanks" % blob
+        out = ex.scrub_text(line)
+        self.assertNotIn(blob, out)
+        self.assertIn("here is my token", out)
+
+    def test_firebase_api_key_is_masked(self):
+        key = "AIzaSyExampleFirebaseWebApiKey0000000000"
+        self.assertNotIn(key, ex.scrub_text(key))
+
+    def test_jwt_still_masked_whole_not_just_its_header(self):
+        """Alternation order matters: the dotted JWT rule must win at `eyJ`."""
+        jwt = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMTIzNDUifQ.signaturehere"
+        out = ex.scrub_text(jwt)
+        self.assertEqual(out, "***")
+
+    def test_ordinary_content_is_not_masked(self):
+        for benign in (
+            "eyJhIjoxfQ==",                              # short base64
+            "The eyJ prefix shows up in prose",
+            "a6e7d34a57c8c2881d0e408167c6fa84e39aef7f",  # git sha
+            "result = compute(alpha, beta)",
+        ):
+            self.assertEqual(ex.scrub_text(benign), benign, benign)

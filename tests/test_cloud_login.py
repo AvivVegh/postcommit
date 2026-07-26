@@ -287,3 +287,78 @@ class PasteLogin(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StatusStates(unittest.TestCase):
+    """cloud_login.status must answer "can I use the cloud", not "has the
+    id_token expired" — and must never print the token itself."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.creds = os.path.join(self.tmp.name, "credentials.json")
+
+    class _Provider:
+        def __init__(self, token=None, error=None):
+            self._token, self._error = token, error
+
+        def get_id_token(self):
+            if self._error:
+                raise self._error
+            return self._token
+
+    class _Client:
+        def __init__(self, exc=None):
+            self._exc = exc
+
+        def linkedin_status(self):
+            if self._exc:
+                raise self._exc
+            return {"connected": True}
+
+    def _run(self, provider, client):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            state_name, code = cloud_login.status(
+                creds_path=self.creds, provider=provider, client=client)
+        return state_name, code, buf.getvalue()
+
+    def test_no_credentials_is_signed_out(self):
+        p = self._Provider(error=cloud_login.cloud_auth.AuthError("nope"))
+        name, code, out = self._run(p, self._Client())
+        self.assertEqual((name, code), ("signed-out", 1))
+        self.assertIn("status: signed-out", out)
+
+    def test_expired_id_token_that_refreshes_is_active(self):
+        """The whole point: an expired id_token is the normal steady state."""
+        p = self._Provider(token=_jwt({"email": "a@b.c"}))
+        name, code, out = self._run(p, self._Client())
+        self.assertEqual((name, code), ("active", 0))
+        self.assertIn("status: active", out)
+        self.assertIn("a@b.c", out)
+
+    def test_server_rejection_is_rejected_not_active(self):
+        err = cloud_login.LoginError("denied")
+        err.status = 401
+        name, code, out = self._run(self._Provider(token=_jwt({})), self._Client(err))
+        self.assertEqual((name, code), ("rejected", 1))
+        self.assertIn("status: rejected", out)
+
+    def test_network_failure_does_not_force_a_relogin(self):
+        name, code, out = self._run(
+            self._Provider(token=_jwt({})), self._Client(OSError("dns")))
+        self.assertEqual((name, code), ("active-unverified", 0))
+        self.assertIn("status: active-unverified", out)
+
+    def test_never_prints_the_token(self):
+        token = _jwt({"email": "a@b.c"})
+        for client in (self._Client(), self._Client(OSError("x"))):
+            _, _, out = self._run(self._Provider(token=token), client)
+            self.assertNotIn(token, out)
+
+
+def _jwt(claims):
+    """A syntactically valid unsigned JWT carrying `claims`."""
+    def seg(d):
+        return base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
+    return "%s.%s.%s" % (seg({"alg": "none"}), seg(claims), "sig")
