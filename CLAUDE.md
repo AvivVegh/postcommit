@@ -197,6 +197,18 @@ interactive install QA in `docs/smoke-test.md`.
   `<draft file> → <candidate letter> → post_id`, written after *each* successful push,
   so an interrupted run never double-posts on retry. Failures are deliberately *not*
   recorded — they retry next run. Never "fix" a failed push by re-uploading by hand.
+- **Two different 403s, two different remedies.** The backend gates `POST /posts`
+  behind an active plan and answers `{"error": "subscription_required"}`; a bad token
+  is also a 403. `cloud_sync` keeps `AuthRejected` and `SubscriptionRequired` as
+  *sibling* exceptions so neither can catch the other, because telling an
+  unsubscribed user to run `/login` loops them back to the same error forever. The
+  backend contract lives in the postcommit-cloud repo
+  (`backend/src/shared/auth/require-subscription.ts`) — check it before touching this.
+- **There is no bulk/sync endpoint.** The cloud posts API is five handlers —
+  `POST /posts`, `GET /posts`, `GET /posts/summary`, `PATCH /posts/{id}`,
+  `DELETE /posts/{id}` — so a sync is N sequential creates, and the ledger is what
+  makes that safe. The 3000-char cap in `cloud_sync.MAX_CONTENT_CHARS` mirrors
+  `MAX_CONTENT_LENGTH` in the backend's posts handler; they must not drift.
 - **Only candidate bodies go over the wire.** `drafts.py` strips the `### Candidate`
   label and the `— why this angle` reviewer note (which `agents/post-writer.md`
   marks as not part of the post) before anything reaches `cloud_client`. If the writer's

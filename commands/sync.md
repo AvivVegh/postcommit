@@ -61,6 +61,7 @@ Common outcomes worth relaying verbatim:
 
 - A candidate skipped for exceeding the 3000-character cap — say which draft, so they can trim it.
 - A run aborted because the cloud rejected the credentials — tell them to run `/login` and retry.
+- A run aborted because the account has no active subscription — point them at the dashboard's billing page. Do **not** suggest `/login`: the credentials are fine, and re-authenticating just returns them to the same error.
 
 ## Rules
 

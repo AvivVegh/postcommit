@@ -117,8 +117,21 @@ def _post_id(response):
     return None
 
 
-class AuthRejected(Exception):
-    """The server rejected our credentials mid-run; the rest was not attempted."""
+# The backend gates POST /posts behind an active subscription and answers a
+# *machine-readable* 403 body — `{"error": "subscription_required"}` — precisely
+# so clients can tell "your token is bad" apart from "your plan is". Both arrive
+# as HTTP 403, and the remedies are opposite: re-authenticating does nothing for
+# an unsubscribed user, it just loops them back to the same error.
+SUBSCRIPTION_REQUIRED = "subscription_required"
+
+
+class SyncAborted(Exception):
+    """A run stopped early. Carries whatever had already been decided.
+
+    AuthRejected and SubscriptionRequired are deliberately *siblings*, not
+    parent and child: they are both 403s and catching them in the wrong order
+    would silently give the user the wrong instruction.
+    """
 
     def __init__(self, message, pushed, skipped, failed, already):
         super().__init__(message)
@@ -126,6 +139,18 @@ class AuthRejected(Exception):
         self.skipped = skipped
         self.failed = failed
         self.already = already
+
+
+class AuthRejected(SyncAborted):
+    """The server rejected our credentials; the rest was not attempted."""
+
+
+class SubscriptionRequired(SyncAborted):
+    """The credentials are fine — the account has no active plan."""
+
+
+def _is_subscription_required(exc):
+    return exc.status == 403 and SUBSCRIPTION_REQUIRED in str(exc.message or "").lower()
 
 
 def sync(cwd, client=None, now=None):
@@ -153,6 +178,10 @@ def sync(cwd, client=None, now=None):
         try:
             response = client.create_post(item["content"])
         except CloudApiError as exc:
+            if _is_subscription_required(exc):
+                failed.append(dict(item, reason=str(exc)))
+                raise SubscriptionRequired(str(exc), pushed, skipped,
+                                           failed, already) from exc
             if exc.status in (401, 403):
                 failed.append(dict(item, reason=str(exc)))
                 raise AuthRejected(str(exc), pushed, skipped,
@@ -177,8 +206,11 @@ def _describe(item):
         item["draft"], item["letter"], angle, item.get("chars", 0))
 
 
-def cmd_sync(cwd, dry_run=False):
-    """CLI entry point. Prints a plan or a result summary; never a post body."""
+def cmd_sync(cwd, dry_run=False, client=None):
+    """CLI entry point. Prints a plan or a result summary; never a post body.
+
+    `client` is injectable for tests; the CLI never passes it.
+    """
     if dry_run:
         pending, skipped, already = plan(cwd)
         if not pending and not skipped:
@@ -194,7 +226,14 @@ def cmd_sync(cwd, dry_run=False):
         return 0
 
     try:
-        pushed, skipped, failed, already = sync(cwd)
+        pushed, skipped, failed, already = sync(cwd, client=client)
+    except SubscriptionRequired:
+        from . import cloud_config
+        print("Nothing was pushed: postcommit-cloud needs an active subscription.",
+              file=sys.stderr)
+        print("Manage your plan at %s — signing in again will not help."
+              % cloud_config.dashboard_url(), file=sys.stderr)
+        return 1
     except AuthRejected as exc:
         print("Cloud rejected the credentials: %s" % exc, file=sys.stderr)
         print("Run /login (or `postcommit cloud login --browser`) and retry.",

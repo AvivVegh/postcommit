@@ -175,9 +175,58 @@ class Sync(SyncBase):
         # Stopped after the first rejection instead of retrying the second.
         self.assertEqual(1, len(client.calls))
 
+    def test_subscription_403_is_not_an_auth_rejection(self):
+        """The backend gates POST /posts on an active plan and says so in the
+        403 body. Re-authenticating cannot fix that, so it must not be reported
+        as rejected credentials."""
+        self.write_draft("2026-07-26T09-00-00Z.md")
+        client = _StubClient(
+            fail_with=CloudApiError(403, "subscription_required"))
+        with self.assertRaises(cloud_sync.SubscriptionRequired):
+            cloud_sync.sync(self.cwd, client=client)
+        self.assertEqual(1, len(client.calls))
+
+    def test_plain_403_is_still_an_auth_rejection(self):
+        self.write_draft("2026-07-26T09-00-00Z.md")
+        client = _StubClient(fail_with=CloudApiError(403, "Access denied"))
+        with self.assertRaises(cloud_sync.AuthRejected):
+            cloud_sync.sync(self.cwd, client=client)
+
+    def test_the_two_403s_do_not_catch_each_other(self):
+        """Siblings, not parent/child — catching one must never swallow the other."""
+        self.assertFalse(issubclass(cloud_sync.AuthRejected,
+                                    cloud_sync.SubscriptionRequired))
+        self.assertFalse(issubclass(cloud_sync.SubscriptionRequired,
+                                    cloud_sync.AuthRejected))
+
     def test_nothing_pending_never_builds_a_client(self):
         """No drafts must mean no CloudClient(), so it works signed-out."""
         self.assertEqual(([], [], [], 0), cloud_sync.sync(self.cwd))
+
+
+class Guidance(SyncBase):
+    """cmd_sync must give the remedy that actually matches the failure."""
+
+    def _run(self, error):
+        import contextlib
+        import io
+        self.write_draft("2026-07-26T09-00-00Z.md")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = cloud_sync.cmd_sync(
+                self.cwd, client=_StubClient(fail_with=error))
+        return rc, err.getvalue()
+
+    def test_subscription_403_points_at_billing_not_login(self):
+        rc, err = self._run(CloudApiError(403, "subscription_required"))
+        self.assertEqual(1, rc)
+        self.assertIn("subscription", err.lower())
+        self.assertNotIn("/login", err)
+
+    def test_auth_403_points_at_login(self):
+        rc, err = self._run(CloudApiError(403, "Access denied"))
+        self.assertEqual(1, rc)
+        self.assertIn("/login", err)
 
 
 class DryRun(SyncBase):
