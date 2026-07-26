@@ -25,13 +25,13 @@ import os
 
 # Production API Gateway base URL. Override with POSTCOMMIT_CLOUD_API_URL for
 # local development (the ticket ships prod-default, local-for-testing).
-# TODO(cloud): confirm the final prod gateway / custom domain before release.
-DEFAULT_API_URL = "https://api.postcommit.app"
+# TODO(cloud): swap for the custom domain once it fronts this gateway.
+DEFAULT_API_URL = "https://2nrclbhwl2.execute-api.us-east-1.amazonaws.com"
 
 # Production dashboard base URL, whose /cli-auth page hands tokens back to the
 # CLI loopback server during `postcommit-cloud-mcp login`. Override with
 # POSTCOMMIT_DASHBOARD_URL for local development.
-DEFAULT_DASHBOARD_URL = "https://platfrom.postcommit.dev"
+DEFAULT_DASHBOARD_URL = "https://platform.postcommit.dev"
 
 
 class ConfigError(Exception):
