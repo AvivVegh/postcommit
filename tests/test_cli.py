@@ -104,6 +104,25 @@ class CloudVerb(unittest.TestCase):
         b = build_parser().parse_args(["cloud", "login", "--browser"])
         self.assertTrue(b.browser)
 
+    def test_sync_verb_and_dry_run_flag(self):
+        from postcommit.__main__ import build_parser
+        a = build_parser().parse_args(["cloud", "sync"])
+        self.assertEqual((a.verb, a.dry_run), ("sync", False))
+        b = build_parser().parse_args(["cloud", "sync", "--dry-run"])
+        self.assertTrue(b.dry_run)
+
+    def test_sync_dry_run_needs_no_credentials(self):
+        """The plan is local-only, so it must work before /login."""
+        cwd = tempfile.mkdtemp()
+        old = os.getcwd()
+        os.chdir(cwd)
+        try:
+            rc, out, _ = _capture(["cloud", "sync", "--dry-run"])
+        finally:
+            os.chdir(old)
+        self.assertEqual(rc, 0)
+        self.assertIn("Nothing to sync", out)
+
     def test_bad_cloud_verb_exits_2(self):
         from postcommit.__main__ import build_parser
         with self.assertRaises(SystemExit) as cm:

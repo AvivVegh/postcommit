@@ -77,6 +77,16 @@ def recommendation_path(cwd):
     return os.path.join(state_dir(cwd), "recommendation.json")
 
 
+def synced_path(cwd):
+    """Ledger of which draft candidates have already been pushed to the cloud.
+
+    Lives under .postcommit/ so it inherits the self-ignoring .gitignore — it
+    records draft filenames, which are transcript-derived, so it must not be
+    committable by accident either.
+    """
+    return os.path.join(state_dir(cwd), "synced.json")
+
+
 def watermark_path(cwd):
     return os.path.join(state_dir(cwd), "watermark.json")
 

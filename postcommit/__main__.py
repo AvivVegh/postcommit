@@ -2,7 +2,7 @@
 
     postcommit extract <window>          emit a work bundle to stdout
     postcommit state [show|snooze [N]|unsnooze|mark-posted|drafts-dir|reset]
-    postcommit cloud [status|login [TOKEN] [--browser]|logout]
+    postcommit cloud [status|login [TOKEN] [--browser]|logout|sync [--dry-run]]
     postcommit hook session-end          run the SessionEnd logic (payload on stdin)
     postcommit hook session-start        run the SessionStart logic (payload on stdin)
     postcommit --version
@@ -95,6 +95,14 @@ def cmd_cloud(args):
     """
     from . import cloud_login
     verb = args.verb or "status"
+
+    # `sync` is the one non-auth verb here: it lives on this parser for the same
+    # reason the auth verbs do — the launcher runs `python3 -m postcommit`, so a
+    # verb anywhere else is unreachable from a slash command.
+    if verb == "sync":
+        from . import cloud_sync
+        return cloud_sync.cmd_sync(os.getcwd(), dry_run=args.dry_run)
+
     try:
         if verb == "status":
             return cloud_login.status()[1]
@@ -126,13 +134,16 @@ def build_parser():
                    version="postcommit %s" % __version__)
     sub = p.add_subparsers(dest="command")
 
-    pc = sub.add_parser("cloud", help="cloud auth: status / login / logout")
+    pc = sub.add_parser("cloud",
+                        help="cloud: status / login / logout / sync")
     pc.add_argument("verb", nargs="?", default="status",
-                    choices=["status", "login", "logout"])
+                    choices=["status", "login", "logout", "sync"])
     pc.add_argument("token", nargs="?", default=None,
                     help="paste bundle for `login` (omit to be prompted)")
     pc.add_argument("--browser", action="store_true",
                     help="`login` via the loopback browser flow instead of a paste")
+    pc.add_argument("--dry-run", action="store_true",
+                    help="`sync`: list what would be pushed, touching no network")
     pc.set_defaults(func=cmd_cloud)
 
     pe = sub.add_parser("extract", help="emit a work bundle for a window")
