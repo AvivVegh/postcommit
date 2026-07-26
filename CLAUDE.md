@@ -33,12 +33,15 @@ postcommit/                         # the package — all deterministic logic li
   cloud_auth.py                     #   CredentialProvider seam + credentials writer (stdlib core)
   cloud_login.py                    #   `postcommit cloud` status/login/logout — paste + loopback (stdlib core)
   cloud_client.py                   #   thin REST client for postcommit-cloud (stdlib urllib)
+  cloud_sync.py                     #   `postcommit cloud sync` — push draft candidates + idempotency ledger
+  drafts.py                         #   parse a saved draft file into individual candidate posts
   serve_cloud.py                    #   `postcommit-cloud-mcp` MCP server (optional [cloud] extra) — network passthrough
 .claude-plugin/plugin.json          # plugin manifest (name, version — kept in sync with pyproject)
 .claude-plugin/marketplace.json     # self-hosted marketplace listing this plugin
 commands/post.md                    # /post <window> — the manual trigger (thin dispatcher)
 commands/post-snooze.md             # /post-snooze [days] — hush the nudge
-commands/post-login.md              # /post-login — cloud auth (the ONLY networked command)
+commands/post-login.md              # /post-login — cloud auth (networked: auth only)
+commands/sync.md                    # /sync — push saved drafts to the cloud (networked: content)
 skills/postcommit-extract/SKILL.md  # the thin extract skill adapter (single source of truth)
 agents/post-writer.md               # the writer subagent — LinkedIn taste/template layer
 hooks/hooks.json                    # declares SessionEnd/SessionStart (auto-registered on install)
@@ -127,6 +130,8 @@ interactive install QA in `docs/smoke-test.md`.
   `test_adapter.py` + `test_hook_adapter.py` (the hook shims: timeouts/error swallowing,
   and plugin-root/child-env/CLI resolution respectively), and the cloud set —
   `test_cloud_auth.py`, `test_cloud_client.py`, `test_cloud_login.py`,
+  `test_cloud_sync.py` (ledger idempotency, dry-run does no I/O, auth abort),
+  `test_drafts.py` (candidate parsing; label + reviewer note stripped),
   `test_serve_cloud.py`.
   `tests/_support.py` imports the package (putting the repo root on `sys.path`) and
   builds throwaway git repos / transcript JSONLs. `run_hook` drives the thin shims as
@@ -173,12 +178,29 @@ interactive install QA in `docs/smoke-test.md`.
   `~/.postcommit/credentials.json`), and `cloud_login.py` is what populates that file —
   do not add throwaway auth scaffolding elsewhere. Anything writing credentials goes
   through `cloud_auth.write_credentials`, which is what applies the 0o600 chmod.
-- **One networked command, and only one.** `commands/post-login.md` (`/post-login`) is
-  the sole plugin surface that touches the network, and it carries *authentication
-  only* — never repo content. Do not add cloud calls to `/post`, the extract skill, or
-  the hooks. `plugin.json` still declares **no** `mcpServers`: the plugin bundles a
-  stdlib-only package, and the cloud MCP server needs `mcp>=1.2` + Python ≥3.10, so it
-  cannot ride along the way `/post` does.
+- **Two networked commands, and only two.** `commands/post-login.md` (`/post-login`)
+  carries *authentication only* — never repo content. `commands/sync.md` (`/sync`) is
+  the only surface that sends *content*, and only draft candidates the user has
+  already seen and confirmed. Everything else — `/post`, the extract skill, the hooks
+  — stays entirely local; do not add cloud calls to them. `plugin.json` still declares
+  **no** `mcpServers`: the plugin bundles a stdlib-only package, and the cloud MCP
+  server needs `mcp>=1.2` + Python ≥3.10, so it cannot ride along the way `/post` does.
+  `cloud_sync.py` is stdlib-only for exactly that reason — `/sync` reaches it through
+  the launcher, not through the MCP server.
+- **`/sync` shows a plan before it uploads.** `cloud_sync.plan()` does no network I/O,
+  so `postcommit cloud sync --dry-run` works signed-out and lists every candidate that
+  would go. The command must run it and get confirmation first: a bulk push of
+  transcript-derived drafts should never be a surprise. It uploads all three
+  candidates per draft by design (the cull happens in the dashboard), which is
+  precisely why the plan step is not optional.
+- **Pushes are idempotent via a ledger.** `.postcommit/state/synced.json` records
+  `<draft file> → <candidate letter> → post_id`, written after *each* successful push,
+  so an interrupted run never double-posts on retry. Failures are deliberately *not*
+  recorded — they retry next run. Never "fix" a failed push by re-uploading by hand.
+- **Only candidate bodies go over the wire.** `drafts.py` strips the `### Candidate`
+  label and the `— why this angle` reviewer note (which `agents/post-writer.md`
+  marks as not part of the post) before anything reaches `cloud_client`. If the writer's
+  output format changes, `drafts.py` and its tests change with it.
 - **Cloud auth hangs off the *main* CLI (`postcommit cloud ...`), not
   `postcommit-cloud-mcp`.** The launcher the SessionStart hook writes runs `python3 -m
   postcommit`, so anything the model-run commands must reach has to live on that
