@@ -22,4 +22,4 @@ network calls, ever; only the cloud modules above make outbound requests, and
 only with already-approved draft text.
 """
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
