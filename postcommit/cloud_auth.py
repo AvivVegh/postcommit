@@ -30,9 +30,10 @@ SECURETOKEN_URL = "https://securetoken.googleapis.com/v1/token"
 _EXPIRY_SKEW_SECONDS = 60
 
 _LOGIN_HINT = (
-    "not authenticated with postcommit-cloud. Run `postcommit-cloud-mcp login` "
-    "to sign in via your browser, or set POSTCOMMIT_CLOUD_TOKEN to a Firebase "
-    "id_token. Either populates ~/.postcommit/credentials.json."
+    "not authenticated with postcommit-cloud. Run `postcommit cloud login` and "
+    "paste the token from the dashboard (or `--browser` for the loopback flow), "
+    "or set POSTCOMMIT_CLOUD_TOKEN to a Firebase id_token. Either populates "
+    "~/.postcommit/credentials.json."
 )
 
 

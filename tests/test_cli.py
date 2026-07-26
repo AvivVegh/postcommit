@@ -166,3 +166,44 @@ class Install(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CloudVerb(unittest.TestCase):
+    """`postcommit cloud ...` exists on the *main* CLI so the plugin launcher
+    (which runs `python3 -m postcommit`) can reach cloud auth at all."""
+
+    def test_cloud_verb_is_registered(self):
+        from postcommit.__main__ import build_parser
+        args = build_parser().parse_args(["cloud", "status"])
+        self.assertEqual(args.verb, "status")
+
+    def test_cloud_defaults_to_status(self):
+        from postcommit.__main__ import build_parser
+        self.assertEqual(build_parser().parse_args(["cloud"]).verb, "status")
+
+    def test_login_accepts_inline_token_and_browser_flag(self):
+        from postcommit.__main__ import build_parser
+        a = build_parser().parse_args(["cloud", "login", "BLOB"])
+        self.assertEqual((a.verb, a.token, a.browser), ("login", "BLOB", False))
+        b = build_parser().parse_args(["cloud", "login", "--browser"])
+        self.assertTrue(b.browser)
+
+    def test_bad_cloud_verb_exits_2(self):
+        from postcommit.__main__ import build_parser
+        with self.assertRaises(SystemExit) as cm:
+            build_parser().parse_args(["cloud", "bogus"])
+        self.assertEqual(cm.exception.code, 2)
+
+    def test_status_reports_signed_out_without_credentials(self):
+        """Exit 1 = not usable, so /post-login can branch without parsing."""
+        home = tempfile.mkdtemp()
+        old = os.environ.get("HOME")
+        os.environ["HOME"] = home
+        os.environ.pop("POSTCOMMIT_CLOUD_TOKEN", None)
+        try:
+            rc, out, _ = _capture(["cloud", "status"])
+        finally:
+            if old is not None:
+                os.environ["HOME"] = old
+        self.assertEqual(rc, 1)
+        self.assertIn("status: signed-out", out)

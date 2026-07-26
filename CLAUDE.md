@@ -170,12 +170,28 @@ interactive install QA in `docs/smoke-test.md`.
   elsewhere.
 - **One networked command, and only one.** `commands/post-login.md` (`/post-login`) is
   the sole plugin surface that touches the network, and it carries *authentication
-  only* — never repo content. It shells out to `postcommit-cloud-mcp login` (falling
-  back to `python3 -m postcommit.serve_cloud login`, which works without the `[cloud]`
-  extra since login/logout are dispatched before the server is built). Do not add cloud
-  calls to `/post`, the extract skill, or the hooks. `plugin.json` still declares **no**
-  `mcpServers`: the plugin bundles a stdlib-only package, and the cloud server needs
-  `mcp>=1.2` + Python ≥3.10, so it cannot ride along the way `/post` does.
+  only* — never repo content. Do not add cloud calls to `/post`, the extract skill, or
+  the hooks. `plugin.json` still declares **no** `mcpServers`: the plugin bundles a
+  stdlib-only package, and the cloud MCP server needs `mcp>=1.2` + Python ≥3.10, so it
+  cannot ride along the way `/post` does.
+- **Cloud auth hangs off the *main* CLI (`postcommit cloud ...`), not
+  `postcommit-cloud-mcp`.** The launcher the SessionStart hook writes runs `python3 -m
+  postcommit`, so anything the model-run commands must reach has to live on that
+  parser; a verb only on the separate `postcommit-cloud-mcp` console script is
+  unreachable from `/post-login` and forces a fragile hunt for a source checkout. Keep
+  new model-facing verbs on `__main__.py`. `cloud_login` is stdlib-only, so this costs
+  the dependency-free core nothing.
+- **`status` answers "can I use the cloud", not "has the id_token expired".** The
+  id_token lives ~1h and the refresh_token beside it is long-lived, so an expired
+  id_token is the normal steady state. `cloud_login.status()` returns one of
+  `active` / `active-unverified` / `signed-out` / `rejected` with exit 0 meaning
+  usable, and it never prints the token. Branching on expiry alone would send users
+  back to the dashboard hourly for nothing.
+- **The token must never enter the chat.** The dashboard blob is base64(JSON) holding a
+  long-lived `refresh_token`. Anything in the chat lands in the session transcript,
+  which `postcommit extract` reads — so a pasted token can reach a work bundle, a
+  draft, and a published post. `/post-login` therefore sends the user to their *own*
+  terminal to paste, and `extract._TOKEN_RE` masks the bundle shape as a backstop.
 - **No fabrication.** The writer must never invent numbers, timings, error messages, or
   file names not present in the bundle. Preserve this rule in any edit to the writer.
 - **Generated output** lands in `.postcommit/`, which **ignores itself**: every code

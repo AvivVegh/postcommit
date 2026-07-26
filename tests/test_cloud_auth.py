@@ -77,8 +77,9 @@ class CachedTokenPath(CloudAuthBase):
             provider.get_id_token()
         msg = str(cm.exception)
         self.assertIn("POSTCOMMIT_CLOUD_TOKEN", msg)
-        # The hint must name the exact command a user runs to authenticate.
-        self.assertIn("postcommit-cloud-mcp login", msg)
+        # The hint must name the exact command a user runs to authenticate — the
+        # main-CLI verb, since that is the one the plugin launcher can reach.
+        self.assertIn("postcommit cloud login", msg)
 
 
 class RefreshPath(CloudAuthBase):

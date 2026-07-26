@@ -2,6 +2,7 @@
 
     postcommit extract <window>          emit a work bundle to stdout
     postcommit state [show|snooze [N]|unsnooze|mark-posted|stage-fake|drafts-dir|reset]
+    postcommit cloud [status|login [TOKEN] [--browser]|logout]
     postcommit hook session-end          run the SessionEnd logic (payload on stdin)
     postcommit hook session-start        run the SessionStart logic (payload on stdin)
     postcommit install [--claude]        write the skill adapter into ~/.claude
@@ -86,6 +87,41 @@ def cmd_hook(args):
     return 0
 
 
+def cmd_cloud(args):
+    """Cloud auth verbs, on the *main* CLI so the launcher can reach them.
+
+    `postcommit-cloud-mcp` is a separate console script, and the launcher the
+    SessionStart hook writes runs `python3 -m postcommit` — so before this existed
+    the /post-login command could not reach cloud auth through the plugin at all
+    and had to hunt for a source checkout. cloud_login is stdlib-only, so hanging
+    these verbs here costs the dependency-free core nothing.
+    """
+    from . import cloud_login
+    verb = args.verb or "status"
+    try:
+        if verb == "status":
+            return cloud_login.status()[1]
+        if verb == "login":
+            if args.token:
+                cloud_login.login_paste(blob=args.token)
+            elif args.browser:
+                cloud_login.login()
+            else:
+                cloud_login.login_paste()
+            return 0
+        if verb == "logout":
+            cloud_login.logout()
+            return 0
+    except cloud_login.LoginError as exc:
+        print("Login failed: %s" % exc, file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("Cancelled.", file=sys.stderr)
+        return 1
+    print("unknown cloud verb: %s" % verb, file=sys.stderr)
+    return 2
+
+
 def cmd_install(args):
     from . import install
     return install.install(claude=args.claude or not args.no_claude)
@@ -97,6 +133,15 @@ def build_parser():
     p.add_argument("--version", action="version",
                    version="postcommit %s" % __version__)
     sub = p.add_subparsers(dest="command")
+
+    pc = sub.add_parser("cloud", help="cloud auth: status / login / logout")
+    pc.add_argument("verb", nargs="?", default="status",
+                    choices=["status", "login", "logout"])
+    pc.add_argument("token", nargs="?", default=None,
+                    help="paste bundle for `login` (omit to be prompted)")
+    pc.add_argument("--browser", action="store_true",
+                    help="`login` via the loopback browser flow instead of a paste")
+    pc.set_defaults(func=cmd_cloud)
 
     pe = sub.add_parser("extract", help="emit a work bundle for a window")
     pe.add_argument("window", help="1d | 4h | 30m | today | <sha>..<sha> | since=YYYY-MM-DD")
