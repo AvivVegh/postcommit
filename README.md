@@ -47,8 +47,8 @@ One step. This repo is its own plugin marketplace:
 /plugin install postcommit
 ```
 
-That registers the `/post` and `/post-snooze` commands, the extract skill, the
-post-writer subagent, and the two hooks. Uninstalling removes all of them automatically
+That registers the `/post`, `/post-snooze`, and `/post-login` commands, the extract
+skill, the post-writer subagent, and the two hooks. Uninstalling removes all of them automatically
 — no manual `settings.json` editing. Restart Claude Code once after installing so the
 `SessionStart` hook can wire up the bundled CLI, then `/post` just works.
 
@@ -193,35 +193,37 @@ two different ways.
 scripts/run-tests.sh           # or: python3 -m unittest discover -s tests
 ```
 
-**Lint:** `ruff check postcommit tests hooks` and `bandit -r postcommit hooks`.
+**Lint:** `ruff check postcommit tests hooks` and
+`bandit -c pyproject.toml -r postcommit hooks`.
 
 ### Layout
 
 ```
 pyproject.toml                      # installable package; entry points below
+.claude-plugin/                     # plugin.json + marketplace.json (the plugin manifest)
 postcommit/                         # the package — all deterministic logic
-  __main__.py                       #   `postcommit` CLI: extract | state | hook | install
+  __main__.py                       #   `postcommit` CLI: extract | state | hook | cloud
   extract.py                        #   git + session-transcript → work bundle (masks secrets, caps diff)
   scoring.py                        #   post-worthiness signals + scoring
-  state.py                          #   per-repo/global state (watermark, snooze, recommendation)
+  state.py                          #   per-repo/global state, shared git/transcript constants
   hooks.py                          #   SessionEnd / SessionStart logic
-  serve.py                          #   `postcommit-mcp` — local-only MCP server ([mcp] extra)
   cloud_config.py / cloud_auth.py / cloud_client.py   # stdlib cloud REST client + auth seam
-  cloud_login.py                    #   loopback browser login (stdlib)
+  cloud_login.py                    #   `postcommit cloud` status/login/logout (stdlib)
   serve_cloud.py                    #   `postcommit-cloud-mcp` — networked MCP server ([cloud] extra)
-  install.py                        #   write the skill adapter into a host (~/.claude)
-  data/skill.md                     #   the thin skill adapter, shipped as package data
 commands/post.md                    # /post <window> — the manual trigger
 commands/post-snooze.md             # /post-snooze [days] — hush the nudge
-skills/postcommit-extract/SKILL.md  # thin skill adapter (mirror of data/skill.md)
+commands/post-login.md              # /post-login — cloud auth (the only networked command)
+skills/postcommit-extract/SKILL.md  # the thin extract skill adapter
 agents/post-writer.md               # the writer subagent — the LinkedIn taste layer
 hooks/                              # hooks.json + the two thin shims that call the CLI
 tests/                              # stdlib unittest suite
+docs/smoke-test.md                  # manual install/QA checklist
 scripts/link-local.sh               # dev-only local install
+scripts/run-tests.sh                # run the unittest suite
 ```
 
-**Entry points:** `postcommit` (CLI), `postcommit-mcp` (local MCP server, `[mcp]`
-extra), `postcommit-cloud-mcp` (cloud MCP server, `[cloud]` extra).
+**Entry points:** `postcommit` (CLI) and `postcommit-cloud-mcp` (cloud MCP server,
+`[cloud]` extra).
 
 **The subagent prompt is the product.** `agents/post-writer.md` is the taste/template
 layer that decides whether a draft reads human or like slop. Iterate there first when

@@ -117,6 +117,14 @@ jobs:
         # git, which is preinstalled on ubuntu-latest.
         run: python3 -m unittest discover -s tests -p 'test_*.py' -v
 
+      - name: Cloud MCP server tests (with the [cloud] extra)
+        # Without the extra, test_serve_cloud's build_server test self-skips and
+        # the six cloud tools are never actually registered by any job. Install
+        # the extra once, here, so that path is exercised at least somewhere.
+        run: |
+          python3 -m pip install '.[cloud]'
+          python3 -m unittest discover -s tests -p 'test_serve_cloud.py' -v
+
       - name: Shellcheck dev scripts
         run: shellcheck scripts/link-local.sh scripts/run-tests.sh
 
@@ -154,10 +162,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install bandit
-        run: python3 -m pip install --upgrade bandit
+        # [toml] so bandit can read the [tool.bandit] config in pyproject.toml.
+        run: python3 -m pip install --upgrade 'bandit[toml]'
 
       - name: Scan package and hooks
-        run: python3 -m bandit -r postcommit hooks -ll
+        # -c pyproject.toml is required for bandit to read [tool.bandit]; without
+        # it the documented B404/B603 skips are silently ignored.
+        run: python3 -m bandit -c pyproject.toml -r postcommit hooks -ll
 
   # Guards the "explicit version must be bumped every release or users never
   # update" footgun: on a published release, the git tag must equal the version

@@ -21,27 +21,25 @@ real logic, and the Claude Code plugin surface (command/skill/agent/hooks) are t
 adapters that shell out to the installed `postcommit` CLI. This mirrors graphify.
 
 ```
-pyproject.toml                      # installable package: [project.scripts] postcommit + postcommit-mcp + postcommit-cloud-mcp
-uv.lock                             # pinned resolution (core is dependency-free; mcp is a 3.10+ extra)
+pyproject.toml                      # installable package: [project.scripts] postcommit + postcommit-cloud-mcp
+uv.lock                             # pinned resolution (core is dependency-free; cloud is a 3.10+ extra)
 postcommit/                         # the package — all deterministic logic lives here
-  __main__.py                       #   `postcommit` CLI dispatch: extract | state | hook | install
+  __main__.py                       #   `postcommit` CLI dispatch: extract | state | hook | cloud
   extract.py                        #   deterministic git + session-transcript → work bundle (ported SKILL.md)
   scoring.py                        #   post-worthiness signals + scoring (from the old session-end)
-  state.py                          #   time/paths/json/watermark/git helpers + `state` verbs
+  state.py                          #   time/paths/json/watermark/git helpers, shared constants + `state` verbs
   hooks.py                          #   handle_session_end / handle_session_start
-  serve.py                          #   `postcommit-mcp` MCP server (optional [mcp] extra) — local only
   cloud_config.py                   #   cloud-client config from env (stdlib core)
-  cloud_auth.py                     #   CredentialProvider seam: env/refresh id_token (stdlib core)
+  cloud_auth.py                     #   CredentialProvider seam + credentials writer (stdlib core)
+  cloud_login.py                    #   `postcommit cloud` status/login/logout — paste + loopback (stdlib core)
   cloud_client.py                   #   thin REST client for postcommit-cloud (stdlib urllib)
   serve_cloud.py                    #   `postcommit-cloud-mcp` MCP server (optional [cloud] extra) — network passthrough
-  install.py                        #   write the skill adapter into a host (~/.claude)
-  data/skill.md                     #   the thin skill adapter, shipped as package-data
 .claude-plugin/plugin.json          # plugin manifest (name, version — kept in sync with pyproject)
 .claude-plugin/marketplace.json     # self-hosted marketplace listing this plugin
 commands/post.md                    # /post <window> — the manual trigger (thin dispatcher)
 commands/post-snooze.md             # /post-snooze [days] — hush the nudge
 commands/post-login.md              # /post-login — cloud auth (the ONLY networked command)
-skills/postcommit-extract/SKILL.md  # thin skill adapter — mirror of postcommit/data/skill.md
+skills/postcommit-extract/SKILL.md  # the thin extract skill adapter (single source of truth)
 agents/post-writer.md               # the writer subagent — LinkedIn taste/template layer
 hooks/hooks.json                    # declares SessionEnd/SessionStart (auto-registered on install)
 hooks/session-end.py                # thin shim → `postcommit hook session-end`
@@ -50,7 +48,8 @@ hooks/_adapter.py                   # shared forwarding logic for the two shims
 scripts/link-local.sh               # dev-only: uv-install editable + symlink command/skill/agent + register hooks
 scripts/run-tests.sh                # run the stdlib unittest suite (python3 -m unittest)
 tests/                              # unittest suite for the package (see below)
-README.md                           # product framing, roadmap, how to run the wedge test
+docs/smoke-test.md                  # manual install/QA checklist for a real Claude Code host
+README.md                           # product framing + how to run the wedge test
 .gitignore                          # ignores .postcommit/, build artifacts, tooling caches
 ```
 
@@ -65,9 +64,8 @@ bridges the model-run `/post` path to the bundled package (see the architecture 
 below). Hooks are registered from `hooks/hooks.json` using `${CLAUDE_PLUGIN_ROOT}` and
 removed automatically on uninstall — the `settings.json` surgery in `link-local.sh` is
 only for local iteration, never for the published plugin.
-`skills/postcommit-extract/SKILL.md` is a byte-for-byte mirror of
-`postcommit/data/skill.md`; keep them identical (the package-data copy is what
-`postcommit install` writes into other hosts).
+`skills/postcommit-extract/SKILL.md` is the single source of truth for the extract
+adapter — there is no second copy to keep in sync.
 
 ## The architecture (keep these boundaries clean)
 
@@ -82,7 +80,7 @@ Two layers: **deterministic code** (the `postcommit` package) and **prompt/taste
   stub for the model to fill.
 - **`skills/postcommit-extract/SKILL.md` — the extractor adapter (prompt).** Thin:
   tells the model to run `postcommit extract <window>`, then fill the Candidate signal
-  from the bundle. Mirrors `postcommit/data/skill.md`.
+  from the bundle.
 - **`commands/post.md` — the dispatcher (prompt).** Thin. Parses the window argument,
   invokes the extract skill, hands the bundle to the subagent, saves the result to
   `.postcommit/drafts/<UTC-ISO>.md` (path obtained from `postcommit state
@@ -115,31 +113,38 @@ skill adapter) are still "tested" by hand: the wedge experiment (see README) and
 interactive install QA in `docs/smoke-test.md`.
 
 - **Build/install:** `uv build` produces the wheel/sdist; `uv tool install .` (or
-  `pip install .`) installs the `postcommit` + `postcommit-mcp` entry points. The core
-  is **dependency-free** (stdlib only) so it installs anywhere; the MCP server needs
-  the `[mcp]` extra (`mcp>=1.2`, Python ≥3.10). `uv.lock` pins the resolution. Keep
-  the core stdlib-only — that's the privacy/portability guarantee.
+  `pip install .`) installs the `postcommit` + `postcommit-cloud-mcp` entry points. The
+  core is **dependency-free** (stdlib only) so it installs anywhere; only the cloud MCP
+  server needs the `[cloud]` extra (`mcp>=1.2`, Python ≥3.10). `uv.lock` pins the
+  resolution. Keep the core stdlib-only — that's the privacy/portability guarantee.
 - **Tests:** `scripts/run-tests.sh` (or `python3 -m unittest discover -s tests`). It is
   **stdlib-only `unittest`** — no pytest, no pip install. Coverage under `tests/`:
   `test_postcommit_state.py` (time/json/watermark/git helpers + `state` verbs),
   `test_session_end.py` (scoring, transcript parsing, shortstat, end-to-end staging),
-  `test_session_start.py` (nudge text + all five SessionStart gates),
+  `test_session_start.py` (nudge text + the SessionStart gates),
   `test_extract.py` (window parsing, secret masking, diff cap, transcript distillation,
-  bundle assembly), and `test_cli.py` (argparse dispatch, MCP graceful-degrade, install).
+  bundle assembly), `test_cli.py` (argparse dispatch, the `cloud` verb),
+  `test_adapter.py` + `test_hook_adapter.py` (the hook shims: timeouts/error swallowing,
+  and plugin-root/child-env/CLI resolution respectively), and the cloud set —
+  `test_cloud_auth.py`, `test_cloud_client.py`, `test_cloud_login.py`,
+  `test_serve_cloud.py`.
   `tests/_support.py` imports the package (putting the repo root on `sys.path`) and
   builds throwaway git repos / transcript JSONLs. `run_hook` drives the thin shims as
   subprocesses with `HOME` at a temp dir and `PYTHONPATH` at the checkout so the
   `python -m postcommit` fallback resolves. Add a test alongside any logic change.
 - **Lint:** `ruff check postcommit tests hooks` (config in `pyproject.toml`: E/F/I/B;
   `UP` is intentionally off — the package uses `%`-formatting throughout, matching the
-  code it was ported from). `bandit -r postcommit hooks` is the security lint.
+  code it was ported from). `bandit -c pyproject.toml -r postcommit hooks` is the
+  security lint — the `-c` is required or the documented B404/B603 skips are ignored.
 - **CI:** `.github/workflows/ci.yml`. `validate` (required before merge) parses
-  manifests, checks `plugin.json`/`pyproject.toml` versions agree, verifies the hooks
-  in `hooks.json` exist + are `+x`, byte-compiles the hooks + package, installs the
-  package and smoke-tests the CLI, runs `ruff` and the `unittest` suite, and
-  `shellcheck`s the scripts. `test-matrix` reruns the suite on Python 3.9/3.10/3.11.
-  `security-scan` runs `bandit` (non-blocking). `version-guard` (on release) asserts
-  the git tag equals `plugin.json` `version`.
+  manifests, checks that `plugin.json`, `pyproject.toml` and `postcommit/__init__.py`
+  versions all agree, verifies the hooks in `hooks.json` exist + are `+x`,
+  byte-compiles the hooks + package, installs the package and smoke-tests the CLI,
+  runs `ruff`, the `unittest` suite, and `test_serve_cloud.py` again with the
+  `[cloud]` extra installed (otherwise its `build_server` test self-skips forever),
+  and `shellcheck`s the scripts. `test-matrix` reruns the suite on Python
+  3.9/3.10/3.11. `security-scan` runs `bandit` (non-blocking). `version-guard` (on
+  release) asserts the git tag equals `plugin.json` `version`.
 - `scripts/link-local.sh` — uv-install the package editable, symlink `commands/`,
   `skills/`, `agents/` into `~/.claude/`, and register the hooks so `/post` works
   without publishing. `--unlink` undoes it. Idempotent; refuses to overwrite
@@ -158,16 +163,16 @@ interactive install QA in `docs/smoke-test.md`.
   Extraction masks secrets, caps diff size (~40k chars), keeps ≤10 lines per code
   snippet, and skips `isSidechain` records. The one deliberate exception is the
   **cloud MCP client** (`serve_cloud.py`, `[cloud]` extra): it passes *already-approved
-  draft text* to the postcommit-cloud REST API and nothing else. It is a **separate**
-  server from the local-only `postcommit-mcp` precisely so the local guarantee holds —
-  keep `serve.py` and the extraction path network-free, and keep all outbound HTTP
-  confined to `cloud_client.py`/`cloud_auth.py`.
-- **Cloud client boundary.** `cloud_config.py`/`cloud_auth.py`/`cloud_client.py` are
-  **stdlib-only core** (they install without any extra); only `serve_cloud.py` imports
-  the `mcp` SDK. Auth flows through the `CredentialProvider` seam in `cloud_auth.py`
-  (env token → cached/refreshed `~/.postcommit/credentials.json`); a later ticket adds
-  the interactive login that populates that file — do not add throwaway auth scaffolding
-  elsewhere.
+  draft text* to the postcommit-cloud REST API and nothing else. Keep the extraction
+  path network-free, and keep all outbound HTTP confined to
+  `cloud_client.py`/`cloud_auth.py`.
+- **Cloud client boundary.** `cloud_config.py`/`cloud_auth.py`/`cloud_client.py`/
+  `cloud_login.py` are **stdlib-only core** (they install without any extra); only
+  `serve_cloud.py` imports the `mcp` SDK. Auth flows through the `CredentialProvider`
+  seam in `cloud_auth.py` (env token → cached/refreshed
+  `~/.postcommit/credentials.json`), and `cloud_login.py` is what populates that file —
+  do not add throwaway auth scaffolding elsewhere. Anything writing credentials goes
+  through `cloud_auth.write_credentials`, which is what applies the 0o600 chmod.
 - **One networked command, and only one.** `commands/post-login.md` (`/post-login`) is
   the sole plugin surface that touches the network, and it carries *authentication
   only* — never repo content. Do not add cloud calls to `/post`, the extract skill, or
@@ -201,6 +206,11 @@ interactive install QA in `docs/smoke-test.md`.
   Never `mkdir` that directory directly — route through `ensure_repo_dir` (or, from
   a prompt file, `postcommit state drafts-dir`) or you lose the guarantee. Drafts are
   named by UTC ISO timestamp with colons replaced by dashes for filesystem safety.
+- **`state.py` is the shared-vocabulary home.** `extract.py` and `scoring.py` both walk
+  the same git output and the same Claude Code JSONL records, so the things they must
+  agree on live in `state`: `parse_shortstat`, `EMPTY_TREE`, `META_PREFIXES`,
+  `EDIT_TOOLS`. The two transcript *walks* stay separate on purpose (the scorer runs in
+  a hook and is capped; the extractor is thorough) — share the vocabulary, not the loop.
 - **Conventional commits and branches.** Both carry a type prefix — one of `feat`,
   `fix`, `add`, `docs`, `chore`, `refactor`, `ci`. Commit subjects use
   `type(scope): summary` (scope optional, imperative, no trailing period), e.g.

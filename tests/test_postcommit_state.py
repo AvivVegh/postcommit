@@ -180,14 +180,8 @@ class StateVerbs(unittest.TestCase):
         self.assertEqual(self._wm()["last_posted_head"], self.head)
         self.assertIsNone(st.read_json(st.recommendation_path(self.repo), None))
 
-    def test_stage_fake_writes_post_worthy_rec(self):
-        self.assertEqual(st.state_stage_fake(self.repo), 0)
-        rec = st.read_json(st.recommendation_path(self.repo), None)
-        self.assertEqual(rec["verdict"], "post-worthy")
-        self.assertEqual(rec["head"], self.head)
-
     def test_reset_removes_state(self):
-        st.state_stage_fake(self.repo)
+        st.write_json(st.recommendation_path(self.repo), {"verdict": "post-worthy"})
         st.state_snooze(self.repo, "1")
         self.assertEqual(st.state_reset(self.repo), 0)
         self.assertIsNone(st.read_json(st.recommendation_path(self.repo), None))
@@ -222,7 +216,8 @@ class SelfIgnoringRepoDir(unittest.TestCase):
             self.assertIn("*", fh.read().splitlines())
 
     def test_git_status_stays_clean_after_writing_state(self):
-        st.state_stage_fake(self.repo)
+        st.ensure_repo_dir(self.repo)
+        st.write_json(st.recommendation_path(self.repo), {"verdict": "post-worthy"})
         st.state_snooze(self.repo, "1")
         self.assertEqual(st.git(self.repo, "status", "--porcelain"), "")
 

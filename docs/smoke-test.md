@@ -1,4 +1,4 @@
-# Phase 2 smoke test — install / QA / uninstall
+# Smoke test — install / QA / uninstall
 
 Interactive checklist for verifying the packaged plugin installs, works, and
 cleans up after itself. Runs against a **real Claude Code instance** — the
@@ -8,39 +8,40 @@ There are two passes:
 
 - **Pass A — local marketplace** (de-risk *before* merging). Catches manifest
   errors without needing anything pushed to GitHub.
-- **Pass B — fresh `~/.claude/`** (the real Phase 2 deliverable). Requires the
-  plugin merged to `main` and pushed, because `/plugin marketplace add
-  AvivVegh/postcommit` reads from GitHub.
+- **Pass B — fresh `~/.claude/`** (the real thing). Requires the change merged to
+  `main` and pushed, because `/plugin marketplace add AvivVegh/postcommit` reads
+  from GitHub.
 
-Do Pass A first. Only do Pass B once PR #6 is merged.
+Do Pass A first, then Pass B once the branch is merged.
 
 ---
 
 ## Pre-flight (both passes)
 
-postcommit is code-first: the plugin's command/skill/hooks all shell out to the
-installed `postcommit` CLI. Install it first, then sanity-check the manifests and
-hook shims before you touch Claude Code:
+The plugin **bundles** the Python package — a separate CLI install is *not*
+required, and Pass B deliberately tests the no-install path. So the pre-flight
+only checks the repo itself:
 
 ```bash
-# 1. Install the CLI (the plugin adapters call it). From this checkout:
-uv tool install --force .        # or: pip install .   /  uv tool install postcommit
-postcommit --version             # must print e.g. "postcommit 0.2.0"
-
-# 2. Manifests parse and hook shims are executable.
+# 1. Manifests parse and hook shims are executable.
 for f in .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks.json; do
   python3 -m json.tool "$f" >/dev/null && echo "ok  $f" || echo "BAD $f"
 done
 test -x hooks/session-end.py   && echo "ok  session-end.py executable"   || echo "BAD session-end.py not +x"
 test -x hooks/session-start.py && echo "ok  session-start.py executable" || echo "BAD session-start.py not +x"
 
-# 3. The CLI produces a bundle in a repo with work:
-postcommit extract HEAD~1..HEAD | head -3
+# 2. The bundled package runs straight from the checkout and self-reports the
+#    same version the manifest advertises.
+python3 -m postcommit --version
+python3 -c 'import json; print("plugin.json:", json.load(open(".claude-plugin/plugin.json"))["version"])'
+
+# 3. It produces a bundle in a repo with work:
+python3 -m postcommit extract HEAD~1..HEAD | head -3
 ```
 
-- [ ] `postcommit --version` works (CLI on PATH).
 - [ ] All three JSON files parse.
 - [ ] Both hook shims are executable.
+- [ ] `python3 -m postcommit --version` matches the `plugin.json` version exactly.
 - [ ] `postcommit extract` emits a work bundle.
 
 ---
@@ -55,7 +56,8 @@ Point Claude Code at this working copy as a local marketplace. In Claude Code:
 ```
 
 - [ ] Install completes with no manifest / schema errors.
-- [ ] `/help` (or the command list) shows **`/post`** and **`/post-snooze`**.
+- [ ] `/help` (or the command list) shows **`/post`**, **`/post-snooze`**, and
+      **`/post-login`**.
 - [ ] The `postcommit-extract` skill and `post-writer` subagent are listed.
 - [ ] Hooks registered — see **Verifying hooks** below.
 
@@ -79,6 +81,10 @@ export CLAUDE_CONFIG_DIR="$(mktemp -d)/claude"   # throwaway, fresh config
 echo "using $CLAUDE_CONFIG_DIR"
 ```
 
+For a true fresh-machine test, make sure no standalone CLI is shadowing the
+bundled one — if `command -v postcommit` prints a path, the launcher tier below
+never gets exercised.
+
 Launch Claude Code with that env set. In Claude Code:
 
 ```
@@ -86,9 +92,10 @@ Launch Claude Code with that env set. In Claude Code:
 /plugin install postcommit
 ```
 
-- [ ] Marketplace resolves from GitHub `main` and lists `postcommit` at `0.2.0`.
+- [ ] Marketplace resolves from GitHub `main` and lists `postcommit` at the
+      version in `plugin.json`.
 - [ ] Install completes clean.
-- [ ] `/post` and `/post-snooze` are available.
+- [ ] `/post`, `/post-snooze`, and `/post-login` are available.
 - [ ] Skill + subagent listed.
 - [ ] Hooks registered — see below.
 
@@ -114,6 +121,26 @@ grep -l "session-end.py\|session-start.py" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/
 
 ---
 
+## Verifying the launcher (the single-install plumbing)
+
+`${CLAUDE_PLUGIN_ROOT}` is only visible to hooks, never to the model-run command
+or skill. The SessionStart hook bridges that gap by writing a launcher to a fixed
+path, and `/post` resolves the CLI as PATH → launcher → `python3 -m postcommit`.
+If the launcher is missing, `/post` falls back or fails on a plugin-only install,
+so check it explicitly:
+
+- [ ] After the **first** session start post-install, the launcher exists:
+      ```bash
+      ls -l ~/.postcommit/bin/postcommit
+      ~/.postcommit/bin/postcommit --version
+      ~/.postcommit/bin/postcommit state show
+      ```
+- [ ] It is executable and owner-only (`0700`).
+- [ ] After `/plugin update postcommit` (or moving the plugin root), the launcher
+      is rewritten to point at the new root — `--version` still works.
+
+---
+
 ## Functional checks (run in a scratch git repo)
 
 Do this inside a throwaway repo with a couple of real commits, so the hooks have
@@ -124,7 +151,7 @@ something to score.
 - [ ] Three candidate drafts are produced and saved under
       `.postcommit/drafts/<UTC-ISO>.md`.
 
-**The nudge loop works (Phase 1 via the installed hooks):**
+**The nudge loop works (via the installed hooks):**
 - [ ] Do a little real work (edits + a commit), then **end the session**.
       SessionEnd should stage a recommendation:
       ```bash
@@ -136,6 +163,15 @@ something to score.
       nudge again.
 - [ ] `/post-snooze 1` suppresses the nudge; confirm no nudge on next start.
 
+**`/post-login` works (auth only — no repo content leaves the machine):**
+- [ ] Run `/post-login`. It reports one of `active` / `active-unverified` /
+      `signed-out` / `rejected` and never prints a token.
+- [ ] When signed out, it points you at the dashboard and tells you to run
+      `postcommit cloud login` **in your own terminal** — it must not ask you to
+      paste the token into the chat, and must not run `login` itself.
+- [ ] `postcommit cloud status` exits 0 when the credentials are usable.
+- [ ] `~/.postcommit/credentials.json` is mode `0600` after a login.
+
 ---
 
 ## Uninstall / cleanup checks
@@ -144,7 +180,7 @@ something to score.
 /plugin uninstall postcommit
 ```
 
-- [ ] `/post` and `/post-snooze` are gone.
+- [ ] `/post`, `/post-snooze`, and `/post-login` are gone.
 - [ ] `/hooks` no longer lists the SessionEnd / SessionStart entries — **this is
       the key one**: uninstall must remove the hooks automatically. No dangling
       nudges after removal.
@@ -160,8 +196,8 @@ something to score.
 
 ## Pass / fail
 
-The plugin passes Phase 2 QA when **both** hold:
+The plugin passes QA when **both** hold:
 
-1. Fresh install (Pass B) yields working `/post` + a firing nudge with no manual
-   `settings.json` editing.
+1. Fresh install (Pass B) yields working `/post` + a firing nudge with **no**
+   separate CLI install and no manual `settings.json` editing.
 2. Uninstall removes commands **and** hooks, leaving no dangling registrations.

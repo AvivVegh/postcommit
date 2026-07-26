@@ -28,8 +28,7 @@ from postcommit import (  # noqa: E402,F401  (re-exported)
     state,  # noqa: E402,F401  (re-exported)
 )
 
-# Back-compat aliases so tests can read naturally.
-session_end = hooks
+# Alias so the SessionStart tests read naturally.
 session_start = hooks
 
 
