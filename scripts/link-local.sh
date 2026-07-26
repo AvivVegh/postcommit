@@ -24,6 +24,7 @@ SETTINGS="$CLAUDE_DIR/settings.json"
 LINKS=(
   "commands/post.md                    commands/post.md"
   "commands/post-snooze.md             commands/post-snooze.md"
+  "commands/post-login.md              commands/post-login.md"
   "skills/postcommit-extract           skills/postcommit-extract"
   "agents/post-writer.md               agents/post-writer.md"
 )

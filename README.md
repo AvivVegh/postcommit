@@ -126,14 +126,25 @@ touches the network, and only ever with approved draft text.
 
 ```sh
 uv tool install 'postcommit[cloud]'
-postcommit-cloud-mcp login     # opens your browser, stores a token in ~/.postcommit/credentials.json
+postcommit-cloud-mcp login     # paste a token from the dashboard (see below)
 ```
 
-`login` runs a local loopback handoff: it opens the postcommit-cloud dashboard, waits
-for the browser to hand a token back to a one-shot `127.0.0.1` server, and writes it
-(chmod 600) to `~/.postcommit/credentials.json`. `postcommit-cloud-mcp logout` deletes
-that file. Tokens are refreshed automatically from there — no env vars required for
-normal use.
+From inside Claude Code, `/post-login` does the same thing — it's the one command in
+the plugin that touches the network, and it sends authentication only, never repo
+content. The plugin does **not** register the cloud MCP server itself: it bundles a
+stdlib-only package, while the server needs `mcp>=1.2` and Python ≥3.10, so that part
+is always a real install.
+
+`login` defaults to a **paste** handoff: copy the token from the dashboard, paste it at
+the prompt, and it's decoded and written (chmod 600) to `~/.postcommit/credentials.json`.
+`login --browser` instead runs a local loopback handoff — it opens the dashboard and
+waits for the browser to hand a token back to a one-shot `127.0.0.1` server, timing out
+after 300 seconds. `login <token>` takes the token inline, for scripting.
+
+Either way the stored bundle holds a refresh token, so you paste **once** — tokens are
+refreshed automatically from there, with no env vars required for normal use.
+`postcommit-cloud-mcp logout` deletes the credentials file (and with it the refresh
+token, so you'd have to log in again).
 
 **Tools:** `create_post`, `list_posts`, `update_post`, `delete_post`, `linkedin_status`,
 `linkedin_disconnect`.

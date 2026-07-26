@@ -40,6 +40,7 @@ postcommit/                         # the package — all deterministic logic li
 .claude-plugin/marketplace.json     # self-hosted marketplace listing this plugin
 commands/post.md                    # /post <window> — the manual trigger (thin dispatcher)
 commands/post-snooze.md             # /post-snooze [days] — hush the nudge
+commands/post-login.md              # /post-login — cloud auth (the ONLY networked command)
 skills/postcommit-extract/SKILL.md  # thin skill adapter — mirror of postcommit/data/skill.md
 agents/post-writer.md               # the writer subagent — LinkedIn taste/template layer
 hooks/hooks.json                    # declares SessionEnd/SessionStart (auto-registered on install)
@@ -167,6 +168,14 @@ interactive install QA in `docs/smoke-test.md`.
   (env token → cached/refreshed `~/.postcommit/credentials.json`); a later ticket adds
   the interactive login that populates that file — do not add throwaway auth scaffolding
   elsewhere.
+- **One networked command, and only one.** `commands/post-login.md` (`/post-login`) is
+  the sole plugin surface that touches the network, and it carries *authentication
+  only* — never repo content. It shells out to `postcommit-cloud-mcp login` (falling
+  back to `python3 -m postcommit.serve_cloud login`, which works without the `[cloud]`
+  extra since login/logout are dispatched before the server is built). Do not add cloud
+  calls to `/post`, the extract skill, or the hooks. `plugin.json` still declares **no**
+  `mcpServers`: the plugin bundles a stdlib-only package, and the cloud server needs
+  `mcp>=1.2` + Python ≥3.10, so it cannot ride along the way `/post` does.
 - **No fabrication.** The writer must never invent numbers, timings, error messages, or
   file names not present in the bundle. Preserve this rule in any edit to the writer.
 - **Generated output** lands in `.postcommit/`, which **ignores itself**: every code
