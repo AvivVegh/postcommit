@@ -22,9 +22,9 @@ Keep the skill's list of filtered-out commits — you report it in step 5.
 
 ## 2. Dispatch one post-writer per work item
 
-Cap the run at **5 items**. If more survived, take the 5 with the most substantial slices and remember how many you left; you say so in step 5.
+Write a post for **every** item. There is no cap and no "pick the best N" — a day with 20 pieces of work gets 20 posts, because dropping 15 of them is the thing this command exists to stop. Thin items are handled by the writer's `SKIP`, not by truncating the list.
 
-The items are independent, so dispatch them **in parallel — one message, one Agent call per item**. For each, use the Agent tool with:
+The items are independent, so dispatch them **in parallel — one message, one Agent call per item**. Claude Code bounds how many actually run at once, so a long list needs no manual batching. For each, use the Agent tool with:
 
 - `subagent_type`: `post-writer`
 - `description`: `Draft LinkedIn post`
@@ -73,8 +73,8 @@ One post: `open <path>`. More than one: `open <drafts dir>` so the user reviews 
 Print one short paragraph:
 
 - How many posts were written, and where.
-- What was dropped and why — commits the CLI filtered (merge, release), items the writer returned `SKIP` for, and any items left out by the 5-item cap.
-- A one-line summary of what went in (e.g. "6 commits → 3 work items, 1 session, 5 files touched").
+- What was dropped and why — commits the CLI filtered (merge, release) and items the writer returned `SKIP` for. Nothing else is ever dropped.
+- A one-line summary of what went in, including the item count (e.g. "6 commits → 3 work items, 1 session, 5 files touched").
 - Nothing else. No post previews. No commentary on quality.
 
 ## Rules

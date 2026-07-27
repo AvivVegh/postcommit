@@ -166,6 +166,85 @@ class PerItemDrafts(SyncBase):
         self.assertEqual(["a1b2c3"], list(ledger[self.NAME]))
         self.assertEqual({"A", "B", "a1b2c3"}, {p["key"] for p in pushed})
 
+    def test_same_item_under_a_new_filename_is_not_re_pushed(self):
+        """The bug the flat item index exists for.
+
+        Every /post run stamps the draft filename with its own timestamp, so a
+        second run over an overlapping window writes a *different* file for the
+        *same* work item. Keying only on the filename missed that and pushed the
+        item twice.
+        """
+        self.write_draft("2026-07-26T09-00-00Z-a1b2c3.md", POST_DRAFT)
+        cloud_sync.sync(self.cwd, client=_StubClient())
+
+        rerun = POST_DRAFT.replace("one post body", "reworded post body")
+        self.write_draft("2026-07-27T09-00-00Z-a1b2c3.md", rerun)
+        client = _StubClient()
+        _, _, _, already = cloud_sync.sync(self.cwd, client=client)
+        self.assertEqual([], client.calls)
+        # Both files are now covered: the first by its own per-file entry, the
+        # second by the flat item index.
+        self.assertEqual(2, already)
+
+    def test_two_unsynced_files_for_one_item_push_once(self):
+        """Two /post runs, then a single sync — the ledger has seen neither."""
+        self.write_draft("2026-07-26T09-00-00Z-a1b2c3.md", POST_DRAFT)
+        self.write_draft("2026-07-27T09-00-00Z-a1b2c3.md",
+                         POST_DRAFT.replace("one post", "second one"))
+        client = _StubClient()
+        cloud_sync.sync(self.cwd, client=client)
+        self.assertEqual(["one post body"], client.calls)
+
+    def test_different_items_are_unaffected(self):
+        self.write_draft("2026-07-26T09-00-00Z-a1b2c3.md", POST_DRAFT)
+        self.write_draft("2026-07-26T09-01-00Z-d4e5f6.md", POST_DRAFT)
+        client = _StubClient()
+        cloud_sync.sync(self.cwd, client=client)
+        self.assertEqual(2, len(client.calls))
+        self.assertEqual({"a1b2c3", "d4e5f6"},
+                         set(cloud_sync.read_ledger(self.cwd)["items"]))
+
+    def test_legacy_letters_stay_scoped_to_their_file(self):
+        """A/B mean something different in every file — never flat-indexed."""
+        self.write_draft("2026-07-20T09-00-00Z.md")
+        self.write_draft("2026-07-21T09-00-00Z.md")
+        client = _StubClient()
+        cloud_sync.sync(self.cwd, client=client)
+        self.assertEqual(4, len(client.calls))
+        self.assertEqual({}, cloud_sync.read_ledger(self.cwd)["items"])
+
+    def test_suffixless_drafts_do_not_collide(self):
+        """The POST fallback repeats across files, so it stays file-scoped too."""
+        self.write_draft("notes.md", POST_DRAFT)
+        self.write_draft("other-notes.md", POST_DRAFT)
+        client = _StubClient()
+        cloud_sync.sync(self.cwd, client=client)
+        self.assertEqual(2, len(client.calls))
+        self.assertEqual({}, cloud_sync.read_ledger(self.cwd)["items"])
+
+    def test_a_v1_ledger_reads_as_an_empty_index(self):
+        """No migration: nothing shipped that would have written a v1 ledger."""
+        cloud_sync.write_ledger(self.cwd, {
+            "version": 1,
+            "drafts": {"2026-07-26T09-00-00Z-a1b2c3.md": {
+                "a1b2c3": {"post_id": "p1", "synced_at": "then"}}},
+        })
+        ledger = cloud_sync.read_ledger(self.cwd)
+        self.assertEqual({}, ledger["items"])
+        self.assertEqual(cloud_sync.LEDGER_VERSION, ledger["version"])
+
+    def test_a_v1_ledger_still_blocks_its_own_file(self):
+        """The per-file map keeps working — only the flat index starts empty."""
+        cloud_sync.write_ledger(self.cwd, {
+            "version": 1,
+            "drafts": {self.NAME: {
+                "a1b2c3": {"post_id": "p1", "synced_at": "then"}}},
+        })
+        self.write_draft(self.NAME, POST_DRAFT)
+        pending, _, already = cloud_sync.plan(self.cwd)
+        self.assertEqual([], pending)
+        self.assertEqual(1, already)
+
     def test_a_pre_split_ledger_still_blocks_its_draft(self):
         """Letters written before the split must not be re-pushed."""
         self.write_draft("2026-07-20T09-00-00Z.md")

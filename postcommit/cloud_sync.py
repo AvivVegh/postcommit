@@ -6,11 +6,16 @@ the rules are tight:
 * Only files under `.postcommit/drafts/` are read, and only the post bodies
   within them — `postcommit.drafts` strips the `### Post` / `### Candidate`
   labels and the legacy `— why this angle` reviewer notes before anything is sent.
-* Every push is recorded in `.postcommit/state/synced.json` keyed by draft file
-  and post key (the work item's short sha; a candidate letter for the legacy
-  three-candidate drafts), and the ledger is written after *each* successful
-  push. A crash or a Ctrl-C mid-run therefore costs at most zero duplicates on
-  the next run — re-running is safe.
+* Every push is recorded in `.postcommit/state/synced.json`, and the ledger is
+  written after *each* successful push. A crash or a Ctrl-C mid-run therefore
+  costs at most zero duplicates on the next run — re-running is safe.
+* The ledger has two levels. `drafts` maps draft filename → post key, which is
+  what legacy three-candidate files need (their keys are the letters A/B/C, and
+  those only mean anything within one file). `items` is flat: work item short sha
+  → push record, no filename involved. The flat index is the one that matters,
+  because a draft's filename carries the timestamp of the `/post` run that wrote
+  it — re-running `/post` over an overlapping window writes a *new* file for the
+  *same* work item, so a filename-keyed lookup would miss and re-push it.
 * `plan()` performs no network I/O at all, so the command layer can show the
   user exactly what would be uploaded before anything is.
 
@@ -29,18 +34,32 @@ from . import state
 # oversized candidate from aborting a whole run.
 MAX_CONTENT_CHARS = 3000
 
-LEDGER_VERSION = 1
+# v1 had only the per-filename `drafts` map; v2 adds the flat `items` index. A v1
+# ledger is read as an empty index rather than migrated — nothing is shipped that
+# would have written one, so a migration would be dead code from the day it landed.
+LEDGER_VERSION = 2
 
 
 def _empty_ledger():
-    return {"version": LEDGER_VERSION, "drafts": {}}
+    return {"version": LEDGER_VERSION, "drafts": {}, "items": {}}
 
 
 def read_ledger(cwd):
     data = state.read_json(state.synced_path(cwd), None)
     if not isinstance(data, dict) or not isinstance(data.get("drafts"), dict):
         return _empty_ledger()
+    if not isinstance(data.get("items"), dict):
+        data["items"] = {}
+        data["version"] = LEDGER_VERSION
     return data
+
+
+def _item_suffix(draft_name):
+    """The `<item>` in a `<UTC-ISO>Z-<item>.md` draft filename, or None."""
+    stem = draft_name[:-3] if draft_name.endswith(".md") else draft_name
+    if "Z-" not in stem:
+        return None
+    return stem.rsplit("Z-", 1)[1].strip() or None
 
 
 def write_ledger(cwd, ledger):
@@ -83,12 +102,7 @@ def ledger_key(draft_name, cand):
     key = cand.get("key") or drafts_mod.POST_KEY
     if key != drafts_mod.POST_KEY:
         return key
-    stem = draft_name[:-3] if draft_name.endswith(".md") else draft_name
-    if "Z-" in stem:
-        item = stem.rsplit("Z-", 1)[1].strip()
-        if item:
-            return item
-    return drafts_mod.POST_KEY
+    return _item_suffix(draft_name) or drafts_mod.POST_KEY
 
 
 def plan(cwd):
@@ -102,6 +116,11 @@ def plan(cwd):
 
     ledger = read_ledger(cwd)
     pending, skipped, already = [], [], 0
+    # Two /post runs over overlapping windows can leave the same work item in two
+    # unsynced draft files. The ledger only knows what has already been pushed,
+    # so within one pass the item ids seen so far are tracked here — otherwise a
+    # single sync would push both copies before either reached the ledger.
+    queued = set()
 
     for path in draft_files(cwd):
         name = os.path.basename(path)
@@ -113,13 +132,22 @@ def plan(cwd):
             continue
         for cand in candidates:
             key = ledger_key(name, cand)
-            if key in seen:
+            legacy = cand["key"] != drafts_mod.POST_KEY
+            # The flat index is only consulted for real work item ids. A legacy
+            # letter, or the POST fallback a suffix-less filename yields, means
+            # something different in every file and stays file-scoped.
+            is_item = not legacy and key != drafts_mod.POST_KEY
+            if key in seen or (is_item and (key in ledger["items"]
+                                            or key in queued)):
                 already += 1
                 continue
+            if is_item:
+                queued.add(key)
             item = {
                 "draft": name,
                 "key": key,
-                "legacy": cand["key"] != drafts_mod.POST_KEY,
+                "legacy": legacy,
+                "is_item": is_item,
                 "angle": cand["angle"],
                 "content": cand["content"],
                 "chars": len(cand["content"]),
@@ -214,9 +242,13 @@ def sync(cwd, client=None, now=None):
             failed.append(dict(item, reason=str(exc)))
             continue
 
-        entry = ledger["drafts"].setdefault(item["draft"], {})
-        entry[item["key"]] = {"post_id": _post_id(response),
-                              "synced_at": stamp}
+        record = {"post_id": _post_id(response), "synced_at": stamp}
+        ledger["drafts"].setdefault(item["draft"], {})[item["key"]] = record
+        if item.get("is_item"):
+            # The flat index is what survives the draft filename changing on the
+            # next /post run, so it has to be written in the same breath as the
+            # per-file entry — never in a second pass that a crash could skip.
+            ledger["items"][item["key"]] = dict(record, draft=item["draft"])
         # Written per push, not once at the end: an interrupted run must not
         # re-upload what already landed.
         write_ledger(cwd, ledger)

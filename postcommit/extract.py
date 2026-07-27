@@ -33,11 +33,26 @@ MAX_LINE_CHARS = 200
 MAX_TOOL_CHARS = 120
 
 # Per-commit mode emits N diffs instead of one, so each gets a smaller share and
-# the run as a whole gets a ceiling: a 30-commit window must not produce a bundle
-# no model can hold. Once the total is spent, later slices keep their metadata and
-# lose their patch body — the commit is still visible, just not quotable.
+# the run as a whole aims at a total: a 30-commit window must not produce a bundle
+# no model can hold. The share is computed up front from the number of slices and
+# applied evenly — a first-come-first-served spend would starve the newest slices,
+# which is exactly the work most worth posting about.
 PER_COMMIT_DIFF_CAP = 12_000
 PER_COMMIT_TOTAL_CAP = 60_000
+# The floor beneath the even share. Below ~2k chars a patch stops being quotable,
+# and a slice with nothing quotable in it may as well not have been emitted, so on
+# a large day the total is allowed to exceed PER_COMMIT_TOTAL_CAP.
+#
+# Neither number is a hard ceiling on bundle size, and nothing here should be read
+# as one: `cap_diff` keeps structural lines (`diff --git`, `@@`, mode/rename
+# markers) unconditionally so the shape of a change survives, which means a commit
+# touching many files overruns its share by however many files it touched. Measured
+# on this repo, a 13-slice window came out around 2x its budget. That is the
+# intended trade — a recognizable wide diff beats a budget-exact stub.
+#
+# The guarantees that do *not* bend are secret masking and the snippet rules; total
+# bundle size was only ever about what a model can hold.
+MIN_SLICE_DIFF_CHARS = 2_000
 # A single slice's session excerpt. The flat bundle is deliberately uncapped, but
 # there it is one block; here an unbounded slice would drown the other slices.
 MAX_SLICE_SESSION_LINES = 80
@@ -713,8 +728,8 @@ def build_per_commit_bundle(window, cwd):
     out.append("- files changed: %d  (+%d / -%d)\n" % (files, ins, dels))
 
     # Diffs are fetched once, up front: the filter needs to see them (an
-    # empty-after-masking commit is filtered), and the budget needs to know how
-    # much has been spent before deciding whether the next slice keeps its body.
+    # empty-after-masking commit is filtered), and the budget cannot be divided
+    # evenly until the number of slices that survive the filter is known.
     kept, filtered = [], []
     for commit in commits:
         diff = commit_diff(cwd, commit["sha"])
@@ -737,7 +752,13 @@ def build_per_commit_bundle(window, cwd):
     if not kept:
         out.append("(no commits with a story in this window)\n")
 
-    spent = 0
+    # Every kept slice gets the same share of the budget, decided before any of
+    # it is spent. `cap_diff` only ever elides hunk bodies, so narrowing an
+    # already-capped patch costs another git call nothing.
+    share = min(PER_COMMIT_DIFF_CAP,
+                max(MIN_SLICE_DIFF_CHARS,
+                    PER_COMMIT_TOTAL_CAP // max(1, len(kept))))
+
     prev_ts = None
     for commit, diff in kept:
         c_files, c_ins, c_dels = commit_shortstat(cwd, commit["sha"])
@@ -746,14 +767,9 @@ def build_per_commit_bundle(window, cwd):
         out.append("- files changed: %d  (+%d / -%d)\n" % (c_files, c_ins, c_dels))
 
         out.append("#### Diff")
-        if spent >= PER_COMMIT_TOTAL_CAP:
-            out.append("(diff omitted — bundle diff budget of %d chars reached)"
-                       % PER_COMMIT_TOTAL_CAP)
-        else:
-            spent += len(diff)
-            out.append("```diff")
-            out.append(diff.rstrip())
-            out.append("```")
+        out.append("```diff")
+        out.append(cap_diff(diff, share).rstrip())
+        out.append("```")
         out.append("")
 
         out.append("#### Session excerpts")
