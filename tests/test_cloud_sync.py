@@ -222,28 +222,28 @@ class PerItemDrafts(SyncBase):
         self.assertEqual(2, len(client.calls))
         self.assertEqual({}, cloud_sync.read_ledger(self.cwd)["items"])
 
-    def test_a_v1_ledger_is_backfilled_and_still_blocks(self):
+    def test_a_v1_ledger_reads_as_an_empty_index(self):
+        """No migration: nothing shipped that would have written a v1 ledger."""
         cloud_sync.write_ledger(self.cwd, {
             "version": 1,
             "drafts": {"2026-07-26T09-00-00Z-a1b2c3.md": {
                 "a1b2c3": {"post_id": "p1", "synced_at": "then"}}},
         })
-        self.write_draft("2026-07-27T09-00-00Z-a1b2c3.md", POST_DRAFT)
+        ledger = cloud_sync.read_ledger(self.cwd)
+        self.assertEqual({}, ledger["items"])
+        self.assertEqual(cloud_sync.LEDGER_VERSION, ledger["version"])
+
+    def test_a_v1_ledger_still_blocks_its_own_file(self):
+        """The per-file map keeps working — only the flat index starts empty."""
+        cloud_sync.write_ledger(self.cwd, {
+            "version": 1,
+            "drafts": {self.NAME: {
+                "a1b2c3": {"post_id": "p1", "synced_at": "then"}}},
+        })
+        self.write_draft(self.NAME, POST_DRAFT)
         pending, _, already = cloud_sync.plan(self.cwd)
         self.assertEqual([], pending)
         self.assertEqual(1, already)
-        ledger = cloud_sync.read_ledger(self.cwd)
-        self.assertEqual(cloud_sync.LEDGER_VERSION, ledger["version"])
-        self.assertEqual("p1", ledger["items"]["a1b2c3"]["post_id"])
-
-    def test_v1_backfill_ignores_legacy_letters(self):
-        cloud_sync.write_ledger(self.cwd, {
-            "version": 1,
-            "drafts": {"2026-07-20T09-00-00Z.md": {
-                "A": {"post_id": "p1", "synced_at": "then"},
-                "B": {"post_id": "p2", "synced_at": "then"}}},
-        })
-        self.assertEqual({}, cloud_sync.read_ledger(self.cwd)["items"])
 
     def test_a_pre_split_ledger_still_blocks_its_draft(self):
         """Letters written before the split must not be re-pushed."""

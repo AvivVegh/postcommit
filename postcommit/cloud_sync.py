@@ -34,7 +34,9 @@ from . import state
 # oversized candidate from aborting a whole run.
 MAX_CONTENT_CHARS = 3000
 
-# v1 had only the per-filename `drafts` map. v2 adds the flat `items` index.
+# v1 had only the per-filename `drafts` map; v2 adds the flat `items` index. A v1
+# ledger is read as an empty index rather than migrated — nothing is shipped that
+# would have written one, so a migration would be dead code from the day it landed.
 LEDGER_VERSION = 2
 
 
@@ -47,30 +49,9 @@ def read_ledger(cwd):
     if not isinstance(data, dict) or not isinstance(data.get("drafts"), dict):
         return _empty_ledger()
     if not isinstance(data.get("items"), dict):
-        data["items"] = _backfill_items(data["drafts"])
+        data["items"] = {}
         data["version"] = LEDGER_VERSION
     return data
-
-
-def _backfill_items(drafts):
-    """Derive the flat item index from a v1 per-filename map.
-
-    Exact rather than best-effort: a key is a real work item id only when it is
-    literally the filename's `Z-<item>` suffix. Legacy candidate letters and the
-    `POST` fallback are excluded on purpose — both repeat across files, so
-    promoting them to a flat index would suppress unrelated posts.
-    """
-    items = {}
-    for name, keys in drafts.items():
-        if not isinstance(keys, dict):
-            continue
-        item = _item_suffix(name)
-        if not item:
-            continue
-        record = keys.get(item)
-        if record is not None:
-            items[item] = record
-    return items
 
 
 def _item_suffix(draft_name):

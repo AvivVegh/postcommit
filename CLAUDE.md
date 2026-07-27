@@ -229,8 +229,9 @@ interactive install QA in `docs/smoke-test.md`.
   wrote it, so re-running over an overlapping window produces a *new* file for the
   *same* item and a filename-keyed lookup misses it. Only real item shas go in
   `items` — legacy candidate letters and the `POST` fallback repeat across files, so
-  they stay file-scoped (`_backfill_items` migrates a v1 ledger on exactly that
-  rule). `plan()` also dedupes *within* one pass, since two unsynced drafts for one
+  they stay file-scoped. A v1 ledger (no `items`) reads as an empty index rather
+  than being migrated: nothing shipped that would have written one, so a backfill
+  would be dead code. `plan()` also dedupes *within* one pass, since two unsynced drafts for one
   item can both be pending. Failures are deliberately *not* recorded — they retry
   next run. Never "fix" a failed push by re-uploading by hand.
 - **Pre-split drafts still work.** Drafts written before one-post-per-work-item hold
