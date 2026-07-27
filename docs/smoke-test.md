@@ -148,8 +148,11 @@ something to score.
 
 **`/post` works:**
 - [ ] Run `/post 1d` (or `/post HEAD~2..HEAD`).
-- [ ] Three candidate drafts are produced and saved under
-      `.postcommit/drafts/<UTC-ISO>.md`.
+- [ ] One draft per work item is saved as
+      `.postcommit/drafts/<UTC-ISO>-<sha>.md`, each holding exactly one
+      `### Post — <angle>` block.
+- [ ] The report says what was dropped and why (merge/release commits, skipped
+      thin items, anything past the 5-item cap).
 
 **The nudge loop works (via the installed hooks):**
 - [ ] Do a little real work (edits + a commit), then **end the session**.

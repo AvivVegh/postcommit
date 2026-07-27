@@ -62,6 +62,14 @@ def init_repo(path):
     return path
 
 
+def run_git(path, *args):
+    """Run a raw git command in a fixture repo, checked.
+
+    For the shapes `commit()` cannot make — merges, branches, empty commits.
+    """
+    return _run_git(path, *args)
+
+
 def commit(path, filename, contents, message):
     """Write a file and commit it; return the new HEAD sha."""
     with open(os.path.join(path, filename), "w", encoding="utf-8") as fh:

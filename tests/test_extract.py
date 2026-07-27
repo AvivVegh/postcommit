@@ -10,8 +10,9 @@ import os
 import tempfile
 import unittest
 
-from _support import commit, init_repo, write_transcript
+from _support import commit, init_repo, run_git, write_transcript
 from _support import extract as ex
+from _support import state as st
 
 
 class ParseWindow(unittest.TestCase):
@@ -311,3 +312,135 @@ class CredentialBundleMasking(unittest.TestCase):
             "result = compute(alpha, beta)",
         ):
             self.assertEqual(ex.scrub_text(benign), benign, benign)
+
+
+class SessionSlicing(unittest.TestCase):
+    """Session lines belong to the commit they happened *before*."""
+
+    def _session(self, pairs):
+        return {"id": "abc1234f",
+                "entries": [(st.parse_iso(ts), text) for ts, text in pairs]}
+
+    def test_lines_land_in_the_half_open_interval(self):
+        s = self._session([
+            ("2026-07-05T10:00:00Z", "> before"),
+            ("2026-07-05T11:00:00Z", "> boundary"),
+            ("2026-07-05T12:00:00Z", "> after"),
+        ])
+        start = st.parse_iso("2026-07-05T10:00:00Z")
+        end = st.parse_iso("2026-07-05T11:00:00Z")
+        # (start, end] — the line *at* start belongs to the previous slice.
+        self.assertEqual(["> boundary"],
+                         ex.session_lines_between([s], start, end))
+
+    def test_open_bounds_take_everything_on_that_side(self):
+        s = self._session([("2026-07-05T10:00:00Z", "> a"),
+                           ("2026-07-05T12:00:00Z", "> b")])
+        self.assertEqual(["> a", "> b"],
+                         ex.session_lines_between([s], None, None))
+
+    def test_untimestamped_lines_are_dropped_not_guessed(self):
+        s = {"id": "x", "entries": [(None, "> orphan")]}
+        self.assertEqual([], ex.session_lines_between([s], None, None))
+
+    def test_lines_from_several_sessions_come_back_in_time_order(self):
+        a = self._session([("2026-07-05T10:00:00Z", "> first")])
+        b = self._session([("2026-07-05T09:00:00Z", "> earlier")])
+        self.assertEqual(["> earlier", "> first"],
+                         ex.session_lines_between([a, b], None, None))
+
+
+class PerCommitBundle(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = init_repo(os.path.join(self.tmp.name, "repo"))
+
+    def test_one_slice_per_commit_oldest_first(self):
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+        commit(self.repo, "b.txt", "two\n", "feat: add b")
+        commit(self.repo, "c.txt", "three\n", "fix: fix c")
+        bundle = ex.build_per_commit_bundle("HEAD~2..HEAD", self.repo)
+        self.assertIn("### Slice", bundle)
+        self.assertEqual(2, bundle.count("### Slice "))
+        self.assertLess(bundle.index("feat: add b"), bundle.index("fix: fix c"))
+
+    def test_each_slice_carries_its_own_diff(self):
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+        commit(self.repo, "b.txt", "only-in-b\n", "feat: add b")
+        commit(self.repo, "c.txt", "only-in-c\n", "fix: fix c")
+        bundle = ex.build_per_commit_bundle("HEAD~2..HEAD", self.repo)
+        b_slice, c_slice = bundle.split("### Slice ")[1:3]
+        self.assertIn("only-in-b", b_slice)
+        self.assertNotIn("only-in-c", b_slice)
+        self.assertIn("only-in-c", c_slice)
+
+    def test_merge_commit_is_filtered_with_a_reason(self):
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+        run_git(self.repo, "checkout", "-q", "-b", "side")
+        commit(self.repo, "side.txt", "side\n", "feat: side work")
+        run_git(self.repo, "checkout", "-q", "-")
+        commit(self.repo, "main.txt", "main\n", "feat: main work")
+        run_git(self.repo, "merge", "-q", "--no-ff", "-m", "Merge branch 'side'",
+                "side")
+        bundle = ex.build_per_commit_bundle("1d", self.repo)
+        self.assertIn("Merge branch 'side' — merge commit", bundle)
+        slices = bundle.split("## Work slices")[1]
+        self.assertNotIn("Merge branch", slices)
+        self.assertIn("feat: side work", slices)   # its parents still get one
+
+    def test_release_commit_is_filtered(self):
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+        commit(self.repo, "v.txt", "0.10.0\n", "chore(release): 0.10.0")
+        bundle = ex.build_per_commit_bundle("HEAD~1..HEAD", self.repo)
+        self.assertIn("chore(release): 0.10.0 — release/version bump", bundle)
+        self.assertIn("(no commits with a story in this window)", bundle)
+
+    def test_ordinary_commits_are_not_filtered(self):
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+        commit(self.repo, "b.txt", "two\n", "chore: tidy the makefile")
+        bundle = ex.build_per_commit_bundle("HEAD~1..HEAD", self.repo)
+        self.assertIn("nothing filtered", bundle)
+        self.assertIn("chore: tidy the makefile", bundle)
+
+    def test_secrets_are_masked_inside_a_slice(self):
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+        commit(self.repo, "conf.py", 'api_key = "sk-abcdef0123456789"\n',
+               "feat: add config")
+        bundle = ex.build_per_commit_bundle("HEAD~1..HEAD", self.repo)
+        self.assertNotIn("sk-abcdef0123456789", bundle)
+        self.assertIn("api_key", bundle)
+
+    def test_per_commit_diff_is_capped(self):
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+        commit(self.repo, "big.txt", ("x" * 60 + "\n") * 500, "feat: big file")
+        bundle = ex.build_per_commit_bundle("HEAD~1..HEAD", self.repo)
+        self.assertIn("lines elided]", bundle)
+        self.assertLess(len(bundle), 2 * ex.PER_COMMIT_DIFF_CAP)
+
+    def test_uncommitted_work_is_its_own_slice(self):
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+        with open(os.path.join(self.repo, "a.txt"), "w") as fh:
+            fh.write("one\ndirty\n")
+        bundle = ex.build_per_commit_bundle("HEAD..HEAD", self.repo)
+        self.assertIn("### Slice working — uncommitted changes", bundle)
+        self.assertIn("dirty", bundle)
+
+    def test_empty_when_no_work(self):
+        commit(self.repo, "a.txt", "one\n", "first")
+        bundle = ex.build_per_commit_bundle("HEAD..HEAD", self.repo)
+        self.assertIn("No meaningful work in window.", bundle)
+
+    def test_grouping_is_left_to_the_model(self):
+        """The bundle must ask for grouping, not perform it."""
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+        commit(self.repo, "b.txt", "two\n", "feat: add b")
+        bundle = ex.build_per_commit_bundle("HEAD~1..HEAD", self.repo)
+        self.assertIn("## Grouping + candidate signal", bundle)
+        self.assertIn("work items", bundle)
+
+    def test_not_a_repo_raises(self):
+        plain = os.path.join(self.tmp.name, "plain")
+        os.makedirs(plain)
+        with self.assertRaises(ex.NotARepoError):
+            ex.build_per_commit_bundle("1d", plain)

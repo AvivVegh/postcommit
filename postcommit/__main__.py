@@ -1,6 +1,7 @@
 """postcommit — command-line entry point.
 
-    postcommit extract <window>          emit a work bundle to stdout
+    postcommit extract <window> [--per-commit]
+                                         emit a work bundle to stdout
     postcommit state [show|snooze [N]|unsnooze|mark-posted|drafts-dir|reset]
     postcommit cloud [status|login [TOKEN] [--browser]|logout|sync [--dry-run]]
     postcommit hook session-end          run the SessionEnd logic (payload on stdin)
@@ -29,8 +30,10 @@ def _read_payload():
 
 def cmd_extract(args):
     from . import extract
+    build = (extract.build_per_commit_bundle if getattr(args, "per_commit", False)
+             else extract.build_bundle)
     try:
-        bundle = extract.build_bundle(args.window, os.getcwd())
+        bundle = build(args.window, os.getcwd())
     except extract.WindowError as exc:
         print("postcommit extract: %s" % exc, file=sys.stderr)
         return 2
@@ -148,6 +151,8 @@ def build_parser():
 
     pe = sub.add_parser("extract", help="emit a work bundle for a window")
     pe.add_argument("window", help="1d | 4h | 30m | today | <sha>..<sha> | since=YYYY-MM-DD")
+    pe.add_argument("--per-commit", action="store_true",
+                    help="one section per commit instead of one merged diff")
     pe.set_defaults(func=cmd_extract)
 
     ps = sub.add_parser("state", help="inspect/adjust per-repo nudge state")

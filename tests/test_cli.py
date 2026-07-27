@@ -40,6 +40,18 @@ class Dispatch(unittest.TestCase):
         self.assertIn("# Work bundle", out)
         self.assertIn("feat: add b", out)
 
+    def test_extract_per_commit_emits_slices(self):
+        rc, out, _ = _capture(["extract", "HEAD~1..HEAD", "--per-commit"])
+        self.assertEqual(rc, 0)
+        self.assertIn("# Work bundle (per commit)", out)
+        self.assertIn("### Slice ", out)
+
+    def test_extract_without_the_flag_stays_flat(self):
+        """The flag is opt-in: the old whole-window shape must not move."""
+        rc, out, _ = _capture(["extract", "HEAD~1..HEAD"])
+        self.assertEqual(rc, 0)
+        self.assertNotIn("### Slice ", out)
+
     def test_extract_bad_window_returns_2(self):
         rc, _, err = _capture(["extract", "nonsense"])
         self.assertEqual(rc, 2)

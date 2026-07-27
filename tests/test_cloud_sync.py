@@ -1,9 +1,14 @@
-"""Tests for postcommit.cloud_sync — pushing draft candidates to the cloud.
+"""Tests for postcommit.cloud_sync — pushing draft posts to the cloud.
 
 No network: a stub client records every create_post call. The emphasis is on the
 two properties that make a bulk uploader safe to re-run — idempotency via the
 ledger, and `plan()` doing no I/O — plus the guarantee that reviewer notes and
-candidate labels never reach the wire.
+post labels never reach the wire.
+
+Most of the abort/failure cases run against a *legacy* two-candidate draft on
+purpose: those files are still on users' disks, and they are also the cheapest
+way to exercise "second push in the same file" behaviour. `PerItemDrafts` covers
+the current one-post-per-file shape and the sha-keyed ledger.
 """
 
 import os
@@ -16,7 +21,19 @@ from _support import state
 from postcommit import cloud_sync
 from postcommit.cloud_client import CloudApiError
 
-DRAFT = """# LinkedIn draft candidates — 2026-07-26
+POST_DRAFT = """# LinkedIn draft — 2026-07-26
+
+- window: `1d`
+- item: `a1b2c3`
+
+---
+
+### Post — the cost of the obvious approach
+
+one post body
+"""
+
+LEGACY_DRAFT = """# LinkedIn draft candidates — 2026-07-26
 
 - window: `1d`
 
@@ -56,7 +73,7 @@ class SyncBase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.cwd, True)
         os.makedirs(state.drafts_dir(self.cwd))
 
-    def write_draft(self, name, body=DRAFT):
+    def write_draft(self, name, body=LEGACY_DRAFT):
         path = os.path.join(state.drafts_dir(self.cwd), name)
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(body)
@@ -67,7 +84,7 @@ class Plan(SyncBase):
     def test_lists_every_candidate(self):
         self.write_draft("2026-07-26T09-00-00Z.md")
         pending, skipped, already = cloud_sync.plan(self.cwd)
-        self.assertEqual(["A", "B"], [p["letter"] for p in pending])
+        self.assertEqual(["A", "B"], [p["key"] for p in pending])
         self.assertEqual([], skipped)
         self.assertEqual(0, already)
 
@@ -91,12 +108,91 @@ class Plan(SyncBase):
         self.write_draft("2026-07-26T09-00-00Z.md", "just a note\n")
         pending, skipped, _ = cloud_sync.plan(self.cwd)
         self.assertEqual([], pending)
-        self.assertEqual("no candidate blocks found", skipped[0]["reason"])
+        self.assertEqual("no post blocks found", skipped[0]["reason"])
 
     def test_missing_drafts_dir_is_not_an_error(self):
         empty = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, empty, True)
         self.assertEqual(([], [], 0), cloud_sync.plan(empty))
+
+
+class PerItemDrafts(SyncBase):
+    """One post per work item, keyed in the ledger by the item's short sha."""
+
+    NAME = "2026-07-26T09-00-00Z-a1b2c3.md"
+
+    def test_one_pending_post_keyed_by_the_filename_sha(self):
+        self.write_draft(self.NAME, POST_DRAFT)
+        pending, skipped, already = cloud_sync.plan(self.cwd)
+        self.assertEqual(["a1b2c3"], [p["key"] for p in pending])
+        self.assertEqual([], skipped)
+        self.assertFalse(pending[0]["legacy"])
+
+    def test_ledger_records_under_the_sha(self):
+        self.write_draft(self.NAME, POST_DRAFT)
+        cloud_sync.sync(self.cwd, client=_StubClient())
+        entry = cloud_sync.read_ledger(self.cwd)["drafts"][self.NAME]
+        self.assertEqual(["a1b2c3"], list(entry))
+        self.assertEqual("post-1", entry["a1b2c3"]["post_id"])
+
+    def test_rerun_pushes_nothing_new(self):
+        self.write_draft(self.NAME, POST_DRAFT)
+        cloud_sync.sync(self.cwd, client=_StubClient())
+        client = _StubClient()
+        _, _, _, already = cloud_sync.sync(self.cwd, client=client)
+        self.assertEqual([], client.calls)
+        self.assertEqual(1, already)
+
+    def test_body_goes_over_the_wire_without_the_label(self):
+        self.write_draft(self.NAME, POST_DRAFT)
+        client = _StubClient()
+        cloud_sync.sync(self.cwd, client=client)
+        self.assertEqual(["one post body"], client.calls)
+
+    def test_a_draft_with_no_sha_suffix_still_syncs(self):
+        """Hand-named or hand-written files must not be unsyncable."""
+        self.write_draft("notes.md", POST_DRAFT)
+        pending, _, _ = cloud_sync.plan(self.cwd)
+        self.assertEqual(["POST"], [p["key"] for p in pending])
+
+    def test_legacy_and_new_drafts_coexist(self):
+        self.write_draft("2026-07-20T09-00-00Z.md")            # legacy A/B
+        self.write_draft(self.NAME, POST_DRAFT)                # new single post
+        client = _StubClient()
+        pushed, _, _, _ = cloud_sync.sync(self.cwd, client=client)
+        self.assertEqual(3, len(client.calls))
+        ledger = cloud_sync.read_ledger(self.cwd)["drafts"]
+        self.assertEqual(["A", "B"], sorted(ledger["2026-07-20T09-00-00Z.md"]))
+        self.assertEqual(["a1b2c3"], list(ledger[self.NAME]))
+        self.assertEqual({"A", "B", "a1b2c3"}, {p["key"] for p in pushed})
+
+    def test_a_pre_split_ledger_still_blocks_its_draft(self):
+        """Letters written before the split must not be re-pushed."""
+        self.write_draft("2026-07-20T09-00-00Z.md")
+        cloud_sync.write_ledger(self.cwd, {
+            "version": 1,
+            "drafts": {"2026-07-20T09-00-00Z.md": {
+                "A": {"post_id": "p1", "synced_at": "then"},
+                "B": {"post_id": "p2", "synced_at": "then"}}},
+        })
+        pending, _, already = cloud_sync.plan(self.cwd)
+        self.assertEqual([], pending)
+        self.assertEqual(2, already)
+
+
+class Describe(SyncBase):
+    def test_new_draft_needs_no_candidate_label(self):
+        line = cloud_sync._describe(
+            {"draft": "d.md", "key": "a1b2c3", "angle": "the surprise",
+             "chars": 12})
+        self.assertIn("post — the surprise", line)
+        self.assertNotIn("Candidate", line)
+
+    def test_legacy_draft_keeps_its_letter(self):
+        line = cloud_sync._describe(
+            {"draft": "d.md", "key": "B", "legacy": True, "angle": "lesson",
+             "chars": 12})
+        self.assertIn("Candidate B — lesson", line)
 
 
 class Sync(SyncBase):

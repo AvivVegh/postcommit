@@ -33,7 +33,7 @@ Never upload before the user has seen what would go. Run:
 <CLI> cloud sync --dry-run
 ```
 
-This touches no network. It lists each candidate that would be pushed as `<draft file>  Candidate <A|B|C> — <angle> (<n> chars)`, plus anything skipped and a count of what has already been synced.
+This touches no network. It lists each post that would be pushed as `<draft file>  post — <angle> (<n> chars)`, plus anything skipped and a count of what has already been synced. Drafts written before the one-post-per-work-item split hold three candidates each and list as `Candidate <A|B|C> — <angle>`; they still sync, and their ledger entries still block re-pushes.
 
 Relay that list as-is. Do **not** print the post bodies — the user reviews those in the draft files, not in chat.
 
@@ -41,9 +41,9 @@ If it says nothing is pending, say so and stop.
 
 ## 3. Confirm, then push
 
-Show the total — "this uploads N candidates from M draft files" — and ask the user to confirm before running anything.
+Show the total — "this uploads N posts from M draft files" — and ask the user to confirm before running anything.
 
-Note plainly, in one line, that this pushes **all three candidates** from each draft, not just the one they liked. That is the intended behaviour: the cull happens in the dashboard. Say it anyway, because the drafts are derived from session transcripts and a bulk upload should never be a surprise.
+Note plainly, in one line, that this pushes **every unsynced draft in the repo**, not only the ones from their last `/post` run — and that any pre-split draft still on disk contributes all three of its candidates. The drafts are derived from session transcripts, so a bulk upload should never be a surprise.
 
 Only after they agree:
 
@@ -59,12 +59,12 @@ One or two lines: how many were pushed, skipped, or failed, and where to review 
 
 Common outcomes worth relaying verbatim:
 
-- A candidate skipped for exceeding the 3000-character cap — say which draft, so they can trim it.
+- A post skipped for exceeding the 3000-character cap — say which draft, so they can trim it.
 - A run aborted because the cloud rejected the credentials — tell them to run `/login` and retry.
 - A run aborted because the account has no active subscription — point them at the dashboard's billing page. Do **not** suggest `/login`: the credentials are fine, and re-authenticating just returns them to the same error.
 
 ## Rules
 
-- Nothing here reads git history or session transcripts. It uploads only the candidate bodies already saved under `.postcommit/drafts/`, with the `### Candidate` labels and the `— why this angle` reviewer notes stripped by the CLI.
+- Nothing here reads git history or session transcripts. It uploads only the post bodies already saved under `.postcommit/drafts/`, with the `### Post` / `### Candidate` labels and the legacy `— why this angle` reviewer notes stripped by the CLI.
 - `/post`, the extract skill and the hooks stay entirely local — never add a cloud call to them.
 - Never re-upload by hand to "fix" a failure. The ledger exists to keep runs idempotent; just re-run `<CLI> cloud sync`.

@@ -1,9 +1,9 @@
 ---
-description: Draft 3 candidate LinkedIn posts from real work in this repo
+description: Draft one LinkedIn post per piece of real work in this repo
 argument-hint: <window: e.g. 1d, 4h, HEAD~3..HEAD, since=2026-07-01>
 ---
 
-You are drafting LinkedIn posts about real work done in this repo within a specified window.
+You are drafting LinkedIn posts about real work done in this repo within a specified window. **One post per piece of work** — not three posts about one blob of work, and not one post about a whole day.
 
 **Window:** `$ARGUMENTS`
 
@@ -12,23 +12,29 @@ If `$ARGUMENTS` is empty, stop immediately and tell the user:
 
 Otherwise, proceed through these steps in order. Do not skip steps. Do not print draft candidates to the chat — the user wants to review them in an editor, not inline.
 
-## 1. Build the work bundle
+## 1. Build the work bundles
 
-Load and follow the `postcommit-extract` skill. Pass it the window `$ARGUMENTS`. It will return a markdown work bundle covering git state and Claude Code session activity for this repo within the window.
+Load and follow the `postcommit-extract` skill. Pass it the window `$ARGUMENTS`. It slices the window into one section per commit, filters the noise commits, and groups the slices into **work items** — returning one self-contained bundle per item, each with an id (the newest commit's short sha, or `working`).
 
 If the skill reports "no meaningful work in window," stop and tell the user plainly. Do not fabricate a bundle.
 
-## 2. Dispatch to the post-writer subagent
+Keep the skill's list of filtered-out commits — you report it in step 5.
 
-Use the Agent tool with:
+## 2. Dispatch one post-writer per work item
+
+Cap the run at **5 items**. If more survived, take the 5 with the most substantial slices and remember how many you left; you say so in step 5.
+
+The items are independent, so dispatch them **in parallel — one message, one Agent call per item**. For each, use the Agent tool with:
 
 - `subagent_type`: `post-writer`
-- `description`: `Draft LinkedIn posts`
-- `prompt`: the complete work bundle from step 1, followed by:
+- `description`: `Draft LinkedIn post`
+- `prompt`: that item's complete bundle, followed by:
 
-  > Produce exactly 3 candidate LinkedIn posts as instructed in your system prompt. Output raw markdown only — no preamble, no postscript, no chat.
+  > Produce exactly one LinkedIn post as instructed in your system prompt, in the angle that fits this item. Output raw markdown only — no preamble, no postscript, no chat.
 
-Capture the subagent's full response verbatim.
+Capture each subagent's full response verbatim.
+
+A response of `SKIP: <reason>` means the item had no surprise and no takeaway. That is a correct outcome, not a failure: write no file for it and report the reason in step 5.
 
 ## 3. Save to disk
 
@@ -39,34 +45,37 @@ Get the drafts directory from the CLI — do **not** `mkdir` it yourself. The CL
   || ~/.postcommit/bin/postcommit state drafts-dir
 ```
 
-It prints the absolute path. Write the drafts to `<that path>/<UTC-ISO-8601>.md` (e.g. `2026-07-04T20-15-33Z.md` — colons replaced with dashes for filesystem safety).
+It prints the absolute path. Write **one file per post** to `<that path>/<UTC-ISO-8601>-<item id>.md` (e.g. `2026-07-04T20-15-33Z-a1b2c3.md` — colons replaced with dashes for filesystem safety). The item id suffix is not decoration: `/sync` reads it back as the ledger key, so a re-run over an overlapping window does not re-upload work already pushed.
 
-The file's contents must be:
+Each file's contents must be:
 
 ```
-# LinkedIn draft candidates — <UTC ISO date>
+# LinkedIn draft — <UTC ISO date>
 
 - window: `<the $ARGUMENTS value>`
 - repo: `<basename of cwd>`
 - branch: `<current git branch>`
+- item: `<item id>`
+- commits: `<short shas of the item's commits>`
 - generated: `<UTC ISO timestamp>`
 
 ---
 
-<the subagent's raw output, unmodified>
+<that item's subagent output, unmodified>
 ```
 
-## 4. Open the file
+## 4. Open the result
 
-Run `open <path>` so the user can review in their default editor.
+One post: `open <path>`. More than one: `open <drafts dir>` so the user reviews them side by side.
 
 ## 5. Report
 
-Print exactly one short paragraph:
+Print one short paragraph:
 
-- The saved file path.
-- A one-line summary of what went into the bundle (e.g. "2 commits, 1 session, ~47 min active work, 5 files touched").
-- Nothing else. No candidate previews. No commentary on quality.
+- How many posts were written, and where.
+- What was dropped and why — commits the CLI filtered (merge, release), items the writer returned `SKIP` for, and any items left out by the 5-item cap.
+- A one-line summary of what went in (e.g. "6 commits → 3 work items, 1 session, 5 files touched").
+- Nothing else. No post previews. No commentary on quality.
 
 ## Rules
 
