@@ -28,10 +28,11 @@ about what we just did."** If it doesn't, there's no product. That honesty test 
 
 ```
 /post <window>
-   → extract      deterministic: git state + session transcript → a "work bundle"
-                  (masks secrets, caps the diff, skips sidechains — all local)
-   → post-writer  a Claude subagent turns the bundle into 3 candidate drafts
-   → save         drafts land in .postcommit/drafts/<UTC-ISO>.md and open in your editor
+   → extract      deterministic: git state + session transcript → one "work bundle"
+                  per commit (masks secrets, caps diffs, skips sidechains — all local)
+   → group        related commits become one work item; merge/release commits drop out
+   → post-writer  one Claude subagent per item → one post, in the angle that fits it
+   → save         drafts land in .postcommit/drafts/<UTC-ISO>-<sha>.md and open in your editor
 ```
 
 Two layers keep it honest: **deterministic code** (an installable Python package does
@@ -78,10 +79,19 @@ The window argument accepts:
 | Git range | `HEAD~3..HEAD`, `main..HEAD` | A commit range |
 | Date | `since=2026-07-01` | Since a calendar date |
 
-You get three drafts in three fixed angles — a **debugging story**, a **counterintuitive
-lesson**, and a **tiny tool share** — saved to `.postcommit/drafts/<UTC-ISO>.md` and
-opened in your editor. The angles are fixed on purpose so you can compare output
-apples-to-apples over time.
+You get **one draft per piece of work** — not three variations of the same one. The
+window is sliced per commit, related commits are grouped back into a work item, and
+each item gets its own post in whichever angle fits it (the surprise, the cost of the
+obvious approach, a decision and its tradeoff, what broke, a small tool that saved
+time). Each lands in `.postcommit/drafts/<UTC-ISO>-<sha>.md` and opens in your editor.
+
+Noise doesn't get a post: merge commits and release chores are filtered, and an item
+with no surprise and no takeaway is skipped rather than padded. `/post` tells you
+exactly what it dropped and why.
+
+The posts are written for a mixed **product + engineering** feed — a story someone in
+product can retell, with at least one real, checkable detail from your actual work in
+it.
 
 You do **not** need to add anything to your `.gitignore`. postcommit creates
 `.postcommit/` with a `.gitignore` of its own containing `*`, so the directory —

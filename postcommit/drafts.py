@@ -1,8 +1,17 @@
 """postcommit.drafts — parse saved draft files into individual posts (stdlib).
 
-`/post` saves one file per run under `.postcommit/drafts/<UTC-ISO>.md`, and that
-file is *not* one post: it is a small header block followed by three candidates
-in fixed angles, as specified by `agents/post-writer.md`:
+`/post` saves one file per work item under `.postcommit/drafts/<UTC-ISO>-<sha>.md`,
+holding a small header block and exactly one post, as specified by
+`agents/post-writer.md`:
+
+    ### Post — <one-line angle description>
+
+    <the post itself>
+
+The `### Post` heading is a label, not post copy, and must never be published.
+
+**Legacy shape.** Before one-post-per-work-item, a run wrote three candidates
+into a single file:
 
     ### Candidate <A|B|C> — <one-line angle description>
 
@@ -10,21 +19,26 @@ in fixed angles, as specified by `agents/post-writer.md`:
 
     — why this angle: <one sentence for the human reviewer>
 
-separated by horizontal rules. Two things in there must never be published: the
-`### Candidate` heading (it is a label, not post copy) and the `— why this angle`
-line, which the writer spec explicitly marks as "not part of the post".
+separated by horizontal rules. Those files are still on users' disks, still
+syncable, and still carry the reviewer note the writer spec marked as "not part
+of the post" — so both headings parse and the note is still stripped.
 
 Splitting on the horizontal rules would be wrong — the header block is separated
-from the body by one too, and a post may legitimately contain one. So candidates
-are located by their headings and each block runs to the next heading.
+from the body by one too, and a post may legitimately contain one. So posts are
+located by their headings and each block runs to the next heading.
 """
 
 import re
 
-# The heading tolerates any dash the writer (or a human editor) used between the
-# letter and the angle description, and tolerates the angle being absent.
+# Both headings in one pattern. The dash between the label and the angle
+# description may be any dash a writer or a human editor used, and the angle may
+# be absent entirely. A legacy heading yields its letter as the key; the current
+# one yields the constant POST.
+POST_KEY = "POST"
+
 _HEADING_RE = re.compile(
-    r"^[ \t]*#{2,4}[ \t]+Candidate[ \t]+([A-Za-z])[ \t]*(?:[—–-][ \t]*(.*?))?[ \t]*$",
+    r"^[ \t]*#{2,4}[ \t]+(?:Post|Candidate[ \t]+([A-Za-z]))[ \t]*"
+    r"(?:[—–-][ \t]*(.*?))?[ \t]*$",
     re.MULTILINE)
 
 # "— why this angle: ..." — em dash in the spec, but accept the ASCII variants a
@@ -49,11 +63,16 @@ def _strip_trailing_rules(block):
 
 
 def parse_candidates(text):
-    """Return [{"letter", "angle", "content"}] for each candidate in `text`.
+    """Return [{"key", "angle", "content"}] for each post in `text`.
 
-    Returns [] when the file has no candidate headings at all — a hand-written
-    or truncated draft. Candidates whose body is empty once the heading and the
-    reviewer note are removed are dropped, not returned as blank posts.
+    `key` is `POST` for the current one-post-per-file shape and the candidate
+    letter for a legacy three-candidate file — it is what `cloud_sync` keys the
+    idempotency ledger on, which is why a legacy file must keep reporting its
+    letters.
+
+    Returns [] when the file has no post headings at all — a hand-written or
+    truncated draft. Posts whose body is empty once the heading and the reviewer
+    note are removed are dropped, not returned blank.
     """
     headings = list(_HEADING_RE.finditer(text or ""))
     out = []
@@ -64,8 +83,9 @@ def parse_candidates(text):
         content = _strip_trailing_rules(block).strip()
         if not content:
             continue
+        letter = match.group(1)
         out.append({
-            "letter": match.group(1).upper(),
+            "key": letter.upper() if letter else POST_KEY,
             "angle": (match.group(2) or "").strip(),
             "content": content,
         })

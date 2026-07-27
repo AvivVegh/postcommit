@@ -12,6 +12,12 @@ left as a stub for the /post flow to fill, so this stays fully deterministic.
 
     from postcommit.extract import build_bundle
     print(build_bundle("1d", "/path/to/repo"))
+
+Two shapes come out of here. `build_bundle` is the flat whole-window view (one
+merged diff). `build_per_commit_bundle` slices the same window into one section
+per commit — the shape `/post` uses, because one post is meant to cover one
+piece of work, not everything that happened in a day. Which slices belong to the
+same piece of work is judgment, so that grouping is left to the model.
 """
 
 import json
@@ -25,6 +31,16 @@ DIFF_CHAR_CAP = 40_000
 MAX_PROMPT_CHARS = 280
 MAX_LINE_CHARS = 200
 MAX_TOOL_CHARS = 120
+
+# Per-commit mode emits N diffs instead of one, so each gets a smaller share and
+# the run as a whole gets a ceiling: a 30-commit window must not produce a bundle
+# no model can hold. Once the total is spent, later slices keep their metadata and
+# lose their patch body — the commit is still visible, just not quotable.
+PER_COMMIT_DIFF_CAP = 12_000
+PER_COMMIT_TOTAL_CAP = 60_000
+# A single slice's session excerpt. The flat bundle is deliberately uncapped, but
+# there it is one block; here an unbounded slice would drown the other slices.
+MAX_SLICE_SESSION_LINES = 80
 
 _DURATION_RE = re.compile(r"^(\d+)([dhm])$")
 _SINCE_RE = re.compile(r"^since=(\d{4}-\d{2}-\d{2})$")
@@ -120,38 +136,138 @@ def _earliest_commit_time(cwd, rng):
 # --- Step 2: gather git state ----------------------------------------------
 
 
-def gather_git(cwd, win):
+def gather_repo(cwd):
+    """Repo identity + working-tree state. No window, no diff of the window.
+
+    Split out of `gather_git` so per-commit mode can have the header block
+    without paying for a whole-window `git diff` it never renders.
+    """
     top = st.git(cwd, "rev-parse", "--show-toplevel")
     if not top:
         raise NotARepoError("%s is not inside a git work tree" % cwd)
-    top = os.path.abspath(top)
 
-    branch = st.git(cwd, "rev-parse", "--abbrev-ref", "HEAD") or "?"
     status = st.git(cwd, "status", "--porcelain=v1") or ""
-
-    commits = st.git(cwd, "log", "--pretty=format:%h %ci %s", *win["log_args"]) or ""
-    commit_lines = [ln for ln in commits.splitlines() if ln.strip()]
-
-    shortstat = st.git(cwd, "diff", "--shortstat", win["diff_range"]) or ""
-    files, ins, dels = st.parse_shortstat(shortstat)
-
-    raw_diff = st.git(cwd, "diff", win["diff_range"]) or ""
-    diff = cap_diff(mask_secrets(raw_diff))
-
     unstaged = st.git(cwd, "diff") or ""
     staged = st.git(cwd, "diff", "--staged") or ""
 
     return {
-        "top": top,
-        "branch": branch,
+        "top": os.path.abspath(top),
+        "branch": st.git(cwd, "rev-parse", "--abbrev-ref", "HEAD") or "?",
         "status": status,
+        "has_uncommitted": bool(status or unstaged or staged),
+    }
+
+
+def gather_git(cwd, win):
+    repo = gather_repo(cwd)
+
+    commits = st.git(cwd, "log", "--pretty=format:%h %ci %s", *win["log_args"]) or ""
+    commit_lines = [ln for ln in commits.splitlines() if ln.strip()]
+
+    files, ins, dels = window_shortstat(cwd, win)
+
+    raw_diff = st.git(cwd, "diff", win["diff_range"]) or ""
+    diff = cap_diff(mask_secrets(raw_diff))
+
+    out = dict(repo)
+    out.update({
         "commits": commit_lines,
         "files": files,
         "insertions": ins,
         "deletions": dels,
         "diff": diff,
-        "has_uncommitted": bool(status or unstaged or staged),
-    }
+    })
+    return out
+
+
+def window_shortstat(cwd, win):
+    shortstat = st.git(cwd, "diff", "--shortstat", win["diff_range"]) or ""
+    return st.parse_shortstat(shortstat)
+
+
+# --- Step 2b: per-commit slicing --------------------------------------------
+
+# %x1f is the ASCII unit separator — it cannot appear in a commit subject, so
+# splitting on it is safe where splitting on a space or a tab is not.
+_LOG_FORMAT = "%H%x1f%h%x1f%cI%x1f%P%x1f%s"
+
+# Version bumps and release chores are real commits with real diffs, and they
+# have no story in them. Filtered, not deleted: they stay listed with a reason.
+_RELEASE_SUBJECT_RE = re.compile(
+    r"^(?:chore|ci|build)\s*(?:\([^)]*\))?\s*:\s*(?:release|bump|v?\d+\.\d+)"
+    r"|^(?:chore|ci|build)\s*\(release\)"
+    r"|^release[:\s]"
+    r"|^bump\s+version",
+    re.IGNORECASE)
+
+
+def gather_commits(cwd, win):
+    """Every commit in the window, oldest first.
+
+    Returns dicts with sha / short / ts / parents / subject. Parents come along
+    so merge commits can be recognized without a second git call.
+    """
+    out = st.git(cwd, "log", "--pretty=format:" + _LOG_FORMAT, *win["log_args"])
+    commits = []
+    for line in (out or "").splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\x1f")
+        if len(parts) < 5:
+            continue
+        sha, short, when, parents, subject = parts[0], parts[1], parts[2], parts[3], parts[4]
+        commits.append({
+            "sha": sha,
+            "short": short,
+            "ts": st.parse_iso(when),
+            "parents": parents.split(),
+            "subject": subject,
+        })
+    commits.reverse()  # git log is newest-first; slices read chronologically
+    return commits
+
+
+def filter_reason(commit, diff):
+    """Why this commit gets no post, or None if it deserves one."""
+    if len(commit["parents"]) > 1:
+        return "merge commit"
+    if _RELEASE_SUBJECT_RE.search(commit["subject"] or ""):
+        return "release/version bump"
+    if not (diff or "").strip():
+        return "no diff after masking"
+    return None
+
+
+def commit_diff(cwd, sha, limit=PER_COMMIT_DIFF_CAP):
+    """One commit's patch, masked and capped. `--format=` drops the log header."""
+    raw = st.git(cwd, "show", "--format=", "--patch", sha) or ""
+    return cap_diff(mask_secrets(raw), limit)
+
+
+def commit_shortstat(cwd, sha):
+    out = st.git(cwd, "show", "--format=", "--shortstat", sha) or ""
+    return st.parse_shortstat(out)
+
+
+def session_lines_between(sessions, start, end):
+    """Session lines timestamped in `(start, end]`, oldest first.
+
+    A None bound is open on that side. Lines with no timestamp are dropped —
+    they cannot be attributed to a commit, and guessing would put a stranger's
+    words in the wrong story.
+    """
+    picked = []
+    for s in sessions:
+        for ts, text in s["entries"]:
+            if ts is None:
+                continue
+            if start is not None and ts <= start:
+                continue
+            if end is not None and ts > end:
+                continue
+            picked.append((ts, text))
+    picked.sort(key=lambda pair: pair[0])
+    return [text for _, text in picked]
 
 
 # --- diff hygiene: secret masking + size cap -------------------------------
@@ -394,8 +510,12 @@ def distill_session(path, cutoff):
     separate — it runs in a hook and only counts, this builds narrative and is
     uncapped. Shared record vocabulary lives in `state` (META_PREFIXES,
     EDIT_TOOLS).
+
+    Returns both `lines` (flat, for the whole-window bundle) and `entries` —
+    the same lines paired with their record timestamps, which is what lets
+    per-commit mode attribute a line to the commit it happened before.
     """
-    lines = []
+    entries = []
     first_ts = last_ts = None
     cut = cutoff
     try:
@@ -426,7 +546,7 @@ def distill_session(path, cutoff):
                     ):
                         text = _collapse(scrub_text(content))[:MAX_PROMPT_CHARS]
                         if text:
-                            lines.append("> " + text)
+                            entries.append((ts, "> " + text))
                             added = True
                 elif rtype == "assistant":
                     msg = rec.get("message") or {}
@@ -437,14 +557,14 @@ def distill_session(path, cutoff):
                         if btype == "text":
                             head = _first_line(block.get("text", ""))
                             if head:
-                                lines.append(
-                                    "- " + scrub_text(head)[:MAX_LINE_CHARS])
+                                entries.append(
+                                    (ts, "- " + scrub_text(head)[:MAX_LINE_CHARS]))
                                 added = True
                         elif btype == "tool_use":
                             summ = _tool_summary(block.get("name", "?"),
                                                  block.get("input"))
                             if summ:
-                                lines.append("- " + summ)
+                                entries.append((ts, "- " + summ))
                                 added = True
                         # thinking blocks are skipped entirely
 
@@ -455,13 +575,14 @@ def distill_session(path, cutoff):
     except OSError:
         return None
 
-    if not lines:
+    if not entries:
         return None
     return {
         "id": os.path.basename(path)[:8],
         "first_ts": first_ts,
         "last_ts": last_ts,
-        "lines": lines,
+        "entries": entries,
+        "lines": [text for _, text in entries],
     }
 
 
@@ -545,5 +666,132 @@ def build_bundle(window, cwd):
     out.append("- **Real fix / resolution:** —")
     out.append("- **Surprising bit:** —")
     out.append("- **Transferable lesson:** —")
+
+    return "\n".join(out).rstrip() + "\n"
+
+
+def _session_block(lines):
+    """Render a slice's session excerpt, capped so one slice can't drown the rest."""
+    if not lines:
+        return ["(no session activity in this slice)"]
+    if len(lines) <= MAX_SLICE_SESSION_LINES:
+        return list(lines)
+    kept = lines[:MAX_SLICE_SESSION_LINES]
+    return kept + ["[%d more session lines elided]"
+                   % (len(lines) - MAX_SLICE_SESSION_LINES)]
+
+
+def build_per_commit_bundle(window, cwd):
+    """Assemble a **sliced** work bundle: one section per commit. Returns markdown.
+
+    Same deterministic contract as `build_bundle` — this only changes the shape.
+    The grouping of slices into work items is the model's job (see the closing
+    section), because "these three commits are the same piece of work" is
+    judgment, and judgment does not belong in here.
+    """
+    win = parse_window(window, cwd)
+    repo = gather_repo(cwd)
+    commits = gather_commits(cwd, win)
+    sessions = [s for s in (distill_session(p, win["cutoff"])
+                            for p in _transcript_files(cwd, win["cutoff"])) if s]
+
+    meaningful = bool(commits) or repo["has_uncommitted"] or bool(sessions)
+    date = st.iso(st.now_utc())
+    if not meaningful:
+        return ("# Work bundle (per commit) — %s — window: %s\n\n"
+                "> No meaningful work in window." % (date, win["label"]))
+
+    files, ins, dels = window_shortstat(cwd, win)
+
+    out = []
+    out.append("# Work bundle (per commit) — %s — window: %s\n" % (date, win["label"]))
+
+    out.append("## Repo")
+    out.append("- path: %s" % repo["top"])
+    out.append("- branch: %s" % repo["branch"])
+    out.append("- commits in window: %d" % len(commits))
+    out.append("- files changed: %d  (+%d / -%d)\n" % (files, ins, dels))
+
+    # Diffs are fetched once, up front: the filter needs to see them (an
+    # empty-after-masking commit is filtered), and the budget needs to know how
+    # much has been spent before deciding whether the next slice keeps its body.
+    kept, filtered = [], []
+    for commit in commits:
+        diff = commit_diff(cwd, commit["sha"])
+        reason = filter_reason(commit, diff)
+        if reason:
+            filtered.append((commit, reason))
+        else:
+            kept.append((commit, diff))
+
+    out.append("## Filtered out")
+    if filtered:
+        out.append("<!-- listed, not deleted: nothing disappears silently. -->")
+        for commit, reason in filtered:
+            out.append("- %s %s — %s" % (commit["short"], commit["subject"], reason))
+    else:
+        out.append("nothing filtered")
+    out.append("")
+
+    out.append("## Work slices\n")
+    if not kept:
+        out.append("(no commits with a story in this window)\n")
+
+    spent = 0
+    prev_ts = None
+    for commit, diff in kept:
+        c_files, c_ins, c_dels = commit_shortstat(cwd, commit["sha"])
+        out.append("### Slice %s — %s" % (commit["short"], commit["subject"]))
+        out.append("- committed: %s" % (st.iso(commit["ts"]) if commit["ts"] else "?"))
+        out.append("- files changed: %d  (+%d / -%d)\n" % (c_files, c_ins, c_dels))
+
+        out.append("#### Diff")
+        if spent >= PER_COMMIT_TOTAL_CAP:
+            out.append("(diff omitted — bundle diff budget of %d chars reached)"
+                       % PER_COMMIT_TOTAL_CAP)
+        else:
+            spent += len(diff)
+            out.append("```diff")
+            out.append(diff.rstrip())
+            out.append("```")
+        out.append("")
+
+        out.append("#### Session excerpts")
+        out.extend(_session_block(
+            session_lines_between(sessions, prev_ts, commit["ts"])))
+        out.append("")
+        prev_ts = commit["ts"] or prev_ts
+
+    if repo["has_uncommitted"]:
+        raw = st.git(cwd, "diff", "HEAD") or ""
+        out.append("### Slice working — uncommitted changes")
+        out.append("- status:")
+        out.append(repo["status"].rstrip() or "(no porcelain status)")
+        out.append("")
+        out.append("#### Diff")
+        working = cap_diff(mask_secrets(raw), PER_COMMIT_DIFF_CAP)
+        if working.strip():
+            out.append("```diff")
+            out.append(working.rstrip())
+            out.append("```")
+        else:
+            out.append("(untracked files only — no diff)")
+        out.append("")
+        out.append("#### Session excerpts")
+        out.extend(_session_block(session_lines_between(sessions, prev_ts, None)))
+        out.append("")
+
+    out.append("## Grouping + candidate signal (for the model)")
+    out.append("<!-- postcommit extract slices deterministically; it does not")
+    out.append("     decide which slices belong together. That is the one")
+    out.append("     judgment call, and it happens downstream. -->")
+    out.append("- Group the slices above into **work items**: same feature or")
+    out.append("  scope, adjacent in time, overlapping files. Four commits of one")
+    out.append("  feature are one item, not four.")
+    out.append("- Uncommitted work is its own item.")
+    out.append("- Item id = the newest commit's short sha in the group")
+    out.append("  (`working` for the uncommitted item).")
+    out.append("- Then fill, **per item**: Problem / Obvious-but-wrong first move /")
+    out.append("  Real fix / Surprising bit / Transferable lesson.")
 
     return "\n".join(out).rstrip() + "\n"

@@ -34,7 +34,7 @@ postcommit/                         # the package — all deterministic logic li
   cloud_login.py                    #   `postcommit cloud` status/login/logout — paste + loopback (stdlib core)
   cloud_client.py                   #   thin REST client for postcommit-cloud (stdlib urllib)
   cloud_sync.py                     #   `postcommit cloud sync` — push draft candidates + idempotency ledger
-  drafts.py                         #   parse a saved draft file into individual candidate posts
+  drafts.py                         #   parse a saved draft file into its post(s) (current + legacy shape)
   serve_cloud.py                    #   `postcommit-cloud-mcp` MCP server (optional [cloud] extra) — network passthrough
 .claude-plugin/plugin.json          # plugin manifest (name, version — kept in sync with pyproject)
 .claude-plugin/marketplace.json     # self-hosted marketplace listing this plugin
@@ -79,22 +79,26 @@ Two layers: **deterministic code** (the `postcommit` package) and **prompt/taste
   parses the window, gathers git state, locates and filters Claude Code session
   JSONLs, caps the diff, masks secrets, and emits the work bundle. This is where the
   privacy rules live (mask secrets, cap diff ~40k, ≤10 lines/snippet, skip sidechain
-  records, no network). The one judgment call — the "Candidate signal" — is left as a
-  stub for the model to fill.
+  records, no network). Two shapes: `build_bundle` (flat, whole window) and
+  `build_per_commit_bundle` (`--per-commit`, one slice per commit — what `/post`
+  uses). The judgment calls — which slices are the same piece of work, and the
+  "Candidate signal" — are left to the model.
 - **`skills/postcommit-extract/SKILL.md` — the extractor adapter (prompt).** Thin:
-  tells the model to run `postcommit extract <window>`, then fill the Candidate signal
-  from the bundle.
+  tells the model to run `postcommit extract <window> --per-commit`, group the
+  slices into work items, and fill each item's Candidate signal.
 - **`commands/post.md` — the dispatcher (prompt).** Thin. Parses the window argument,
-  invokes the extract skill, hands the bundle to the subagent, saves the result to
-  `.postcommit/drafts/<UTC-ISO>.md` (path obtained from `postcommit state
+  invokes the extract skill, dispatches one writer subagent per work item (in
+  parallel, capped at 5), saves each result to
+  `.postcommit/drafts/<UTC-ISO>-<item>.md` (path obtained from `postcommit state
   drafts-dir`, never `mkdir`'d by hand), and opens it. No creative or extraction
   logic.
 - **`agents/post-writer.md` — the writer (prompt).** Creative and opinionated. This is
   the crown jewel — the file that decides whether a draft reads human or like slop.
   **Iterate here first** when improving output quality.
 
-Data flow: `/post <window>` → extract skill → `postcommit extract` (deterministic
-bundle) → model fills Candidate signal → post-writer subagent → 3 candidate drafts →
+Data flow: `/post <window>` → extract skill → `postcommit extract --per-commit`
+(deterministic per-commit slices) → model groups slices into work items and fills
+each Candidate signal → one post-writer subagent per item → one draft per item →
 saved to disk → opened in editor. The SessionEnd/SessionStart habit-loop is the same
 logic (`postcommit.hooks`/`scoring`/`state`), reached through the thin `hooks/` shims.
 
@@ -131,7 +135,8 @@ interactive install QA in `docs/smoke-test.md`.
   and plugin-root/child-env/CLI resolution respectively), and the cloud set —
   `test_cloud_auth.py`, `test_cloud_client.py`, `test_cloud_login.py`,
   `test_cloud_sync.py` (ledger idempotency, dry-run does no I/O, auth abort),
-  `test_drafts.py` (candidate parsing; label + reviewer note stripped),
+  `test_drafts.py` (post parsing, current + legacy shape; labels + reviewer note
+  stripped),
   `test_serve_cloud.py`.
   `tests/_support.py` imports the package (putting the repo root on `sys.path`) and
   builds throwaway git repos / transcript JSONLs. `run_hook` drives the thin shims as
@@ -159,10 +164,22 @@ interactive install QA in `docs/smoke-test.md`.
 
 - **Prompts are the product.** Behavior changes are edits to the three Markdown files,
   not code. Be precise: these files are read literally by the model at runtime.
-- **Fixed angles, on purpose.** The writer always produces exactly 3 candidates in the
-  same three angles (debugging story / counterintuitive lesson / tiny tool share) so
-  A/B comparison against the DIY baseline stays apples-to-apples. Don't make them
-  dynamic until the fixed angles have proven the wedge.
+- **One post per work item.** A run splits the window into work items and writes
+  exactly one post for each — one piece of work, one post, the way LinkedIn is
+  actually used. Three variations of the same work is a chooser UI, not a publishing
+  flow. The split has a fixed division of labour: **code slices** (per commit,
+  `extract.py`), **the model groups** (which commits are one piece of work),
+  **the writer picks the angle** from a named library and commits to it. Do not move
+  the grouping into Python — commit scopes are too inconsistent for a rule — and do
+  not let the writer hedge by emitting two angles.
+- **Thin items get skipped, not padded.** The writer returns `SKIP: <reason>` when an
+  item has no surprise and no takeaway, and the code filters merge and release
+  commits before that. Everything dropped is *reported* — silent truncation would
+  read as "there was nothing to post about" when there was.
+- **Audience is product + engineering.** The post is a story someone in product can
+  retell, carrying at least one real checkable specific from the bundle as evidence.
+  Both halves matter: jargon walls and substance-free advice are the two failure
+  modes, and `agents/post-writer.md` bans both by name.
 - **Privacy is non-negotiable.** The *extraction/drafting* path runs entirely locally.
   Never add a step that sends transcripts, diffs, or drafts over the network from it.
   Extraction masks secrets, caps diff size (~40k chars), keeps ≤10 lines per code
@@ -180,7 +197,7 @@ interactive install QA in `docs/smoke-test.md`.
   through `cloud_auth.write_credentials`, which is what applies the 0o600 chmod.
 - **Two networked commands, and only two.** `commands/login.md` (`/login`)
   carries *authentication only* — never repo content. `commands/sync.md` (`/sync`) is
-  the only surface that sends *content*, and only draft candidates the user has
+  the only surface that sends *content*, and only draft posts the user has
   already seen and confirmed. Everything else — `/post`, the extract skill, the hooks
   — stays entirely local; do not add cloud calls to them. `plugin.json` still declares
   **no** `mcpServers`: the plugin bundles a stdlib-only package, and the cloud MCP
@@ -188,15 +205,22 @@ interactive install QA in `docs/smoke-test.md`.
   `cloud_sync.py` is stdlib-only for exactly that reason — `/sync` reaches it through
   the launcher, not through the MCP server.
 - **`/sync` shows a plan before it uploads.** `cloud_sync.plan()` does no network I/O,
-  so `postcommit cloud sync --dry-run` works signed-out and lists every candidate that
-  would go. The command must run it and get confirmation first: a bulk push of
-  transcript-derived drafts should never be a surprise. It uploads all three
-  candidates per draft by design (the cull happens in the dashboard), which is
-  precisely why the plan step is not optional.
+  so `postcommit cloud sync --dry-run` works signed-out and lists every post that
+  would go. The command must run it and get confirmation first: it pushes *every*
+  unsynced draft in the repo, not just the last run's, and a bulk push of
+  transcript-derived drafts should never be a surprise.
 - **Pushes are idempotent via a ledger.** `.postcommit/state/synced.json` records
-  `<draft file> → <candidate letter> → post_id`, written after *each* successful push,
-  so an interrupted run never double-posts on retry. Failures are deliberately *not*
-  recorded — they retry next run. Never "fix" a failed push by re-uploading by hand.
+  `<draft file> → <post key> → post_id`, written after *each* successful push, so an
+  interrupted run never double-posts on retry. The key comes from
+  `cloud_sync.ledger_key` — the work item's short sha, read back off the
+  `<UTC-ISO>-<item>.md` filename `/post` chose, which is why that suffix is load-
+  bearing and not decoration. Failures are deliberately *not* recorded — they retry
+  next run. Never "fix" a failed push by re-uploading by hand.
+- **Pre-split drafts still work.** Drafts written before one-post-per-work-item hold
+  three `### Candidate <A|B|C>` blocks and a `— why this angle` reviewer note.
+  `drafts.py` parses both headings and still strips the note, and those files keep
+  their letter ledger keys, so nothing on a user's disk needs migrating or gets
+  re-pushed. Don't "clean up" the legacy branches — they are the compatibility.
 - **Two different 403s, two different remedies.** The backend gates `POST /posts`
   behind an active plan and answers `{"error": "subscription_required"}`; a bad token
   is also a 403. `cloud_sync` keeps `AuthRejected` and `SubscriptionRequired` as
@@ -209,9 +233,9 @@ interactive install QA in `docs/smoke-test.md`.
   `DELETE /posts/{id}` — so a sync is N sequential creates, and the ledger is what
   makes that safe. The 3000-char cap in `cloud_sync.MAX_CONTENT_CHARS` mirrors
   `MAX_CONTENT_LENGTH` in the backend's posts handler; they must not drift.
-- **Only candidate bodies go over the wire.** `drafts.py` strips the `### Candidate`
-  label and the `— why this angle` reviewer note (which `agents/post-writer.md`
-  marks as not part of the post) before anything reaches `cloud_client`. If the writer's
+- **Only post bodies go over the wire.** `drafts.py` strips the `### Post` label —
+  and, on legacy drafts, the `### Candidate <letter>` label plus the `— why this
+  angle` reviewer note — before anything reaches `cloud_client`. If the writer's
   output format changes, `drafts.py` and its tests change with it.
 - **Cloud auth hangs off the *main* CLI (`postcommit cloud ...`), not
   `postcommit-cloud-mcp`.** The launcher the SessionStart hook writes runs `python3 -m
