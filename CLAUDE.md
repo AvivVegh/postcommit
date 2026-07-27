@@ -171,7 +171,16 @@ interactive install QA in `docs/smoke-test.md`.
   `extract.py`), **the model groups** (which commits are one piece of work),
   **the writer picks the angle** from a named library and commits to it. Do not move
   the grouping into Python — commit scopes are too inconsistent for a rule — and do
-  not let the writer hedge by emitting two angles.
+  not let the writer hedge by emitting two angles. **The fan-out is uncapped**: a
+  20-item day gets 20 posts, because a cap re-creates the exact failure the split
+  was built to fix ("most of the day's material never surfaces"). Thin items are
+  dropped by the writer's `SKIP`, never by truncating the list. The per-slice diff
+  budget is **fair-share** — `PER_COMMIT_TOTAL_CAP // len(kept)`, floored at
+  `MIN_SLICE_DIFF_CHARS` — not first-come-first-served, which used to hand the
+  whole budget to the oldest commits and leave the newest slices unquotable.
+  Neither cap is a hard ceiling on bundle size: `cap_diff` keeps structural lines
+  unconditionally, so a wide commit overruns its share. Don't quote those constants
+  as size guarantees; the guarantees are masking and the snippet rules.
 - **Thin items get skipped, not padded.** The writer returns `SKIP: <reason>` when an
   item has no surprise and no takeaway, and the code filters merge and release
   commits before that. Everything dropped is *reported* — silent truncation would
@@ -209,12 +218,20 @@ interactive install QA in `docs/smoke-test.md`.
   would go. The command must run it and get confirmation first: it pushes *every*
   unsynced draft in the repo, not just the last run's, and a bulk push of
   transcript-derived drafts should never be a surprise.
-- **Pushes are idempotent via a ledger.** `.postcommit/state/synced.json` records
-  `<draft file> → <post key> → post_id`, written after *each* successful push, so an
+- **Pushes are idempotent via a two-level ledger.** `.postcommit/state/synced.json`
+  holds `drafts` (`<draft file> → <post key> → post_id`) *and* `items`
+  (`<work item sha> → post_id`), both written after *each* successful push, so an
   interrupted run never double-posts on retry. The key comes from
   `cloud_sync.ledger_key` — the work item's short sha, read back off the
   `<UTC-ISO>-<item>.md` filename `/post` chose, which is why that suffix is load-
-  bearing and not decoration. Failures are deliberately *not* recorded — they retry
+  bearing and not decoration. **The flat `items` index is the one that actually
+  dedupes across runs**: the filename carries the timestamp of the `/post` run that
+  wrote it, so re-running over an overlapping window produces a *new* file for the
+  *same* item and a filename-keyed lookup misses it. Only real item shas go in
+  `items` — legacy candidate letters and the `POST` fallback repeat across files, so
+  they stay file-scoped (`_backfill_items` migrates a v1 ledger on exactly that
+  rule). `plan()` also dedupes *within* one pass, since two unsynced drafts for one
+  item can both be pending. Failures are deliberately *not* recorded — they retry
   next run. Never "fix" a failed push by re-uploading by hand.
 - **Pre-split drafts still work.** Drafts written before one-post-per-work-item hold
   three `### Candidate <A|B|C>` blocks and a `— why this angle` reviewer note.

@@ -418,6 +418,58 @@ class PerCommitBundle(unittest.TestCase):
         self.assertIn("lines elided]", bundle)
         self.assertLess(len(bundle), 2 * ex.PER_COMMIT_DIFF_CAP)
 
+    def test_every_slice_keeps_a_quotable_diff(self):
+        """The budget is shared, not raced for — no slice ends up empty.
+
+        The old first-come-first-served spend gave the oldest commits the whole
+        budget and left the newest ones with metadata only, which is precisely
+        the work most worth posting about.
+        """
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+        for i in range(20):
+            commit(self.repo, "f%d.txt" % i, ("y" * 60 + "\n") * 200,
+                   "feat: change %d" % i)
+        bundle = ex.build_per_commit_bundle("HEAD~20..HEAD", self.repo)
+        slices = bundle.split("### Slice ")[1:]
+        self.assertEqual(20, len(slices))
+        for s in slices:
+            self.assertIn("```diff", s)
+            body = s.split("```diff", 1)[1].split("```", 1)[0]
+            self.assertIn("+", body)
+        self.assertNotIn("diff omitted", bundle)
+
+    def test_the_newest_slice_is_as_quotable_as_the_oldest(self):
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+        for i in range(12):
+            commit(self.repo, "f%d.txt" % i, ("z" * 60 + "\n") * 200,
+                   "feat: change %d" % i)
+        bundle = ex.build_per_commit_bundle("HEAD~12..HEAD", self.repo)
+        slices = bundle.split("### Slice ")[1:]
+        first = slices[0].split("```diff", 1)[1].split("```", 1)[0]
+        last = slices[-1].split("```diff", 1)[1].split("```", 1)[0]
+        # Same share, so same order of magnitude — not one full patch and one stub.
+        self.assertGreater(len(last), len(first) // 2)
+
+    def test_share_never_falls_below_the_floor(self):
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+        for i in range(40):
+            commit(self.repo, "f%d.txt" % i, ("w" * 60 + "\n") * 200,
+                   "feat: change %d" % i)
+        bundle = ex.build_per_commit_bundle("HEAD~40..HEAD", self.repo)
+        slices = bundle.split("### Slice ")[1:]
+        self.assertEqual(40, len(slices))
+        for s in slices:
+            body = s.split("```diff", 1)[1].split("```", 1)[0]
+            self.assertGreater(len(body), ex.MIN_SLICE_DIFF_CHARS // 2)
+
+    def test_a_lone_commit_still_gets_the_full_per_commit_cap(self):
+        """Sharing must not shrink the small case it was never about."""
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+        commit(self.repo, "big.txt", ("x" * 60 + "\n") * 500, "feat: big file")
+        bundle = ex.build_per_commit_bundle("HEAD~1..HEAD", self.repo)
+        body = bundle.split("```diff", 1)[1].split("```", 1)[0]
+        self.assertGreater(len(body), ex.MIN_SLICE_DIFF_CHARS * 2)
+
     def test_uncommitted_work_is_its_own_slice(self):
         commit(self.repo, "a.txt", "one\n", "chore: init")
         with open(os.path.join(self.repo, "a.txt"), "w") as fh:
