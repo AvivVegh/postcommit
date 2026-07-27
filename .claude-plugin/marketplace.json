@@ -7,7 +7,7 @@
     {
       "name": "postcommit",
       "source": "./",
-      "description": "Turn real dev work — git history plus Claude Code session transcripts — into candidate LinkedIn posts. Local-only, manually triggered via /post."
+      "description": "Turn real dev work — git history plus Claude Code session transcripts — into LinkedIn posts — one per piece of work. Local-only, manually triggered via /post."
     }
   ]
 }
