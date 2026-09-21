@@ -9,7 +9,7 @@ post the one you like. Nothing is auto-published.
 
 - 🔒 **Local-only.** Extraction and drafting run entirely on your machine. No transcripts, diffs, or drafts leave it.
 - ✍️ **Grounded in real work.** Drafts are built from your actual commits and session — the writer never invents numbers, errors, or file names.
-- ⚡ **Manual and low-friction.** One command, three drafts, saved to disk. Optional ambient nudges when a session looks post-worthy.
+- ⚡ **Manual and low-friction.** One command, one draft per piece of work, saved to disk. Optional ambient nudges when a session looks post-worthy.
 
 ---
 

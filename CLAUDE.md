@@ -88,7 +88,7 @@ Two layers: **deterministic code** (the `postcommit` package) and **prompt/taste
   slices into work items, and fill each item's Candidate signal.
 - **`commands/post.md` — the dispatcher (prompt).** Thin. Parses the window argument,
   invokes the extract skill, dispatches one writer subagent per work item (in
-  parallel, capped at 5), saves each result to
+  parallel, uncapped — see Conventions), saves each result to
   `.postcommit/drafts/<UTC-ISO>-<item>.md` (path obtained from `postcommit state
   drafts-dir`, never `mkdir`'d by hand), and opens it. No creative or extraction
   logic.
@@ -333,7 +333,12 @@ interactive install QA in `docs/smoke-test.md`.
   itself — used to be dropped silently. It attaches to that slice rather than
   becoming its own item because no diff stands behind it: evidence, not a separate
   piece of work. Same reason a window whose only content is session activity still
-  prints an excerpt block under `## Work slices`.
+  prints an excerpt block under `## Work slices`. **Only when that newest slice is
+  HEAD**, though: the tail is open-ended on the right, so on a historical range
+  (`<old-sha>..<old-sha>`) it would sweep up every session between the range's last
+  commit and *now* — work belonging to later commits, handed to the writer as
+  evidence for this one. "Kept digging" only means anything when there is no later
+  commit the digging could belong to.
 - **A missing `session_id` is never recorded in the watermark.** `handle_session_end`
   dedupes with a membership test against `processed_sessions`, so any stand-in value
   is *sticky*: record `"unknown"` once and every later payload without an id matches
