@@ -74,14 +74,20 @@ def _ensure_launcher(plugin_root):
 def handle_session_end(payload):
     """Stage a post recommendation if this session was post-worthy."""
     cwd = payload.get("cwd") or os.getcwd()
-    session_id = payload.get("session_id") or "unknown"
+    # A missing session_id must NOT collapse to a sentinel. The dedupe below is
+    # a membership test, so a stand-in like "unknown" is sticky: once recorded,
+    # every later payload without an id matches it and SessionEnd returns early
+    # forever — no scoring, no recommendation, no nudge, permanently. An unnamed
+    # session is therefore processed and simply not remembered; re-running it is
+    # idempotent anyway (scoring is pure, the rec is overwritten).
+    session_id = payload.get("session_id") or ""
     transcript_path = payload.get("transcript_path")
 
     if not st.is_git_repo(cwd):
         return  # nothing to talk about outside a repo
 
     wm = st.read_watermark(cwd)
-    if session_id in wm["processed_sessions"]:
+    if session_id and session_id in wm["processed_sessions"]:
         return  # idempotent: already handled this session
 
     tx = scoring.parse_transcript(transcript_path)
@@ -101,7 +107,7 @@ def handle_session_end(payload):
         if pts >= scoring.POST_WORTHY_THRESHOLD:
             rec = {
                 "created_at": st.iso(st.now_utc()),
-                "session_id": session_id,
+                "session_id": session_id or "unknown",
                 "cwd": cwd,
                 "repo": os.path.basename(cwd),
                 "branch": st.git(cwd, "rev-parse", "--abbrev-ref", "HEAD") or "?",
@@ -116,7 +122,8 @@ def handle_session_end(payload):
             st.write_json(st.recommendation_path(cwd), rec)
         # if not post-worthy, we leave any prior pending rec untouched
 
-    wm["processed_sessions"].append(session_id)
+    if session_id:
+        wm["processed_sessions"].append(session_id)
     wm["last_end_head"] = st.git_head(cwd)
     st.write_watermark(cwd, wm)
 

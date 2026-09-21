@@ -9,6 +9,7 @@ import json
 import os
 import tempfile
 import unittest
+import unittest.mock
 
 from _support import commit, init_repo, run_git, write_transcript
 from _support import extract as ex
@@ -496,3 +497,135 @@ class PerCommitBundle(unittest.TestCase):
         os.makedirs(plain)
         with self.assertRaises(ex.NotARepoError):
             ex.build_per_commit_bundle("1d", plain)
+
+
+class _FakeProjectsBase(unittest.TestCase):
+    """Base for tests that need `~/.claude/projects` pointed at a temp dir."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = init_repo(os.path.join(self.tmp.name, "repo"))
+        self.base = os.path.join(self.tmp.name, "projects")
+        os.makedirs(self.base)
+        patcher = unittest.mock.patch.object(
+            ex, "_projects_base", lambda: self.base)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _encoded(self, cwd):
+        return os.path.join(self.base, os.path.abspath(cwd).replace(os.sep, "-"))
+
+
+class TranscriptDirsAcrossCheckouts(_FakeProjectsBase):
+    """One repo, several checkouts, one shared history — one set of transcripts.
+
+    Work done in a linked worktree records its session under that checkout's
+    own encoded dir, while its commits land in the shared history. Scoping
+    transcripts to the current cwd alone is what left slices carrying a diff
+    with no session behind it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+
+    def _project_dir(self, cwd):
+        d = self._encoded(cwd)
+        os.makedirs(d)
+        write_transcript(os.path.join(d, "s.jsonl"),
+                         [{"type": "user", "cwd": cwd,
+                           "message": {"content": "x"}}])
+        return d
+
+    def _add_worktree(self):
+        wt = os.path.join(self.repo, ".claude", "worktrees", "wt")
+        run_git(self.repo, "worktree", "add", "-q", "-b", "feat/x", wt)
+        return wt
+
+    def test_linked_worktree_transcripts_are_found_from_the_main_checkout(self):
+        wt = self._add_worktree()
+        main_dir = self._project_dir(self.repo)
+        wt_dir = self._project_dir(wt)
+
+        found = ex.transcript_dirs(self.repo)
+        self.assertIn(main_dir, found)
+        self.assertIn(wt_dir, found)
+
+    def test_main_checkout_transcripts_are_found_from_inside_a_worktree(self):
+        wt = self._add_worktree()
+        main_dir = self._project_dir(self.repo)
+        wt_dir = self._project_dir(wt)
+
+        found = ex.transcript_dirs(wt)
+        self.assertEqual(wt_dir, found[0])  # the current cwd leads
+        self.assertIn(main_dir, found)
+
+    def test_deleted_worktree_transcripts_are_still_found(self):
+        # git no longer reports a removed worktree, but its sessions ran inside
+        # the repo and the records say so — that is what the sweep recovers.
+        gone = os.path.join(self.repo, ".claude", "worktrees", "gone")
+        gone_dir = self._project_dir(gone)
+        self.assertIn(gone_dir, ex.transcript_dirs(self.repo))
+
+    def test_prefix_sharing_sibling_repo_is_never_scoped_in(self):
+        # `<...>/repo` is a prefix of `<...>/repo-cloud`, so their encoded dir
+        # names are prefixes too. Matching on the name would leak a different
+        # repo's transcripts into this bundle.
+        sibling_dir = self._project_dir(self.repo + "-cloud")
+        self.assertNotIn(sibling_dir, ex.transcript_dirs(self.repo))
+
+
+class TrailingSessionActivity(_FakeProjectsBase):
+    """Session lines newer than the newest commit must not vanish.
+
+    The per-commit loop bounds each slice at its own commit, and the `working`
+    slice that would own the remainder exists only when the tree is dirty — so
+    on a clean tree everything said after the last commit was dropped.
+    """
+
+    FUTURE = "2099-01-01T00:00:00Z"
+
+    def _session(self, text):
+        d = self._encoded(self.repo)
+        os.makedirs(d, exist_ok=True)
+        write_transcript(os.path.join(d, "s.jsonl"), [
+            {"type": "user", "cwd": self.repo, "timestamp": self.FUTURE,
+             "message": {"content": text}},
+        ])
+
+    def test_lines_after_the_last_commit_land_on_the_newest_slice(self):
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+        commit(self.repo, "b.txt", "two\n", "feat: add b")
+        self._session("kept digging after committing")
+
+        bundle = ex.build_per_commit_bundle("1d", self.repo)
+        self.assertIn("_after this commit:_", bundle)
+        self.assertIn("kept digging after committing", bundle)
+        # attached to the newest slice, not promoted to an item of its own
+        newest = bundle.split("### Slice ")[-1]
+        self.assertIn("feat: add b", newest)
+        self.assertIn("_after this commit:_", newest)
+
+    def test_a_dirty_tree_keeps_the_tail_in_the_working_slice_only(self):
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+        with open(os.path.join(self.repo, "a.txt"), "w") as fh:
+            fh.write("one\ndirty\n")
+        self._session("still working")
+
+        bundle = ex.build_per_commit_bundle("1d", self.repo)
+        self.assertNotIn("_after this commit:_", bundle)
+        self.assertEqual(1, bundle.count("still working"))
+        working = bundle.split("### Slice working", 1)[1]
+        self.assertIn("still working", working)
+
+    def test_a_window_with_only_session_activity_still_reports_it(self):
+        # A release commit is filtered out, so no slice survives; with a clean
+        # tree the session lines had nowhere to land and the bundle came back
+        # holding no session content at all.
+        commit(self.repo, "a.txt", "one\n", "chore(release): 0.1.0")
+        self._session("read the ledger code, changed nothing")
+
+        bundle = ex.build_per_commit_bundle("1d", self.repo)
+        self.assertIn("no commits with a story in this window", bundle)
+        self.assertIn("read the ledger code, changed nothing", bundle)

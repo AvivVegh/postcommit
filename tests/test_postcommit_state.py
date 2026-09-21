@@ -110,6 +110,15 @@ class Watermark(unittest.TestCase):
         wm = st.read_watermark(self.tmp.name)
         self.assertEqual(wm["processed_sessions"], [])
 
+    def test_legacy_sentinel_session_ids_are_dropped(self):
+        # Versions that collapsed a missing session_id to a stand-in left this
+        # behind. The dedupe is a membership test, so the value is sticky and
+        # silences SessionEnd in that repo until it is removed.
+        st.write_json(st.watermark_path(self.tmp.name),
+                      {"processed_sessions": ["unknown", "", "sess-1"]})
+        wm = st.read_watermark(self.tmp.name)
+        self.assertEqual(["sess-1"], wm["processed_sessions"])
+
 
 class GitHelpers(unittest.TestCase):
     def setUp(self):

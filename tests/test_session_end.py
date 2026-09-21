@@ -274,6 +274,29 @@ class EndToEnd(unittest.TestCase):
         run_hook("session-end.py", payload, self.home)
         self.assertFalse(os.path.exists(st.recommendation_path(non_repo)))
 
+    def test_a_payload_without_a_session_id_is_still_processed(self):
+        payload = self._payload()
+        del payload["session_id"]
+        run_hook("session-end.py", payload, self.home)
+        self.assertIsNotNone(st.read_json(st.recommendation_path(self.repo), None))
+
+    def test_a_missing_session_id_is_never_recorded(self):
+        """The dedupe is a membership test, so a stand-in id would be sticky.
+
+        Recording something like "unknown" for an unnamed session makes every
+        later unnamed session match it, and SessionEnd returns early forever —
+        no scoring, no recommendation, no nudge, permanently.
+        """
+        payload = self._payload()
+        del payload["session_id"]
+        run_hook("session-end.py", payload, self.home)
+        self.assertEqual([], st.read_watermark(self.repo)["processed_sessions"])
+
+        # second unnamed session: must be processed, not skipped as a duplicate
+        os.remove(st.recommendation_path(self.repo))
+        run_hook("session-end.py", payload, self.home)
+        self.assertIsNotNone(st.read_json(st.recommendation_path(self.repo), None))
+
 
 if __name__ == "__main__":
     unittest.main()

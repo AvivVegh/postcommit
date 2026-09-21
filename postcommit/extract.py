@@ -458,7 +458,7 @@ def transcript_dir(cwd):
     repo's transcripts.
     """
     abscwd = os.path.abspath(cwd)
-    base = os.path.join(os.path.expanduser("~"), ".claude", "projects")
+    base = _projects_base()
     slash_only = abscwd.replace(os.sep, "-")
     also_dots = slash_only.replace(".", "-")
     for enc in (slash_only, also_dots):
@@ -469,6 +469,117 @@ def transcript_dir(cwd):
     return None
 
 
+def _projects_base():
+    return os.path.join(os.path.expanduser("~"), ".claude", "projects")
+
+
+def _checkout_paths(cwd):
+    """Every checkout of this repo, main one first. Empty if git can't say.
+
+    `git worktree list` is authoritative, which matters here: the encoded
+    project-dir names cannot be matched by prefix, because
+    `.../repos/postcommit` is a prefix of `.../repos/postcommit-cloud` — a
+    different repo whose transcripts must never leak into this bundle.
+
+    Both the literal and the symlink-resolved form of each path are returned.
+    git reports resolved paths while Claude Code encodes the cwd it was handed,
+    and on macOS those differ for anything under `/var` or `/tmp` — so matching
+    on one form alone silently finds nothing.
+    """
+    raw = st.git(cwd, "worktree", "list", "--porcelain") or ""
+    paths = []
+    for line in raw.splitlines():
+        if not line.startswith("worktree "):
+            continue
+        reported = line[len("worktree "):].strip()
+        for path in (os.path.abspath(reported), os.path.realpath(reported)):
+            if path not in paths:
+                paths.append(path)
+    return paths
+
+
+def _dir_cwd_under(cand, root):
+    """True when `cand`'s records report a cwd at or inside `root`.
+
+    Strict on purpose — unlike `_dir_is_for_cwd` there is no optimistic
+    fallback for records carrying no `cwd`. This runs over *every* project dir,
+    so an unverifiable one has to be skipped rather than assumed to be ours.
+    """
+    root = os.path.realpath(root)
+    prefix = root + os.sep
+    try:
+        names = [n for n in os.listdir(cand) if n.endswith(".jsonl")]
+    except OSError:
+        return False
+    for name in names:
+        try:
+            with open(os.path.join(cand, name), encoding="utf-8",
+                      errors="replace") as fh:
+                for i, raw in enumerate(fh):
+                    if i >= 50:
+                        break
+                    raw = raw.strip()
+                    if not raw:
+                        continue
+                    try:
+                        rec = json.loads(raw)
+                    except ValueError:
+                        continue
+                    c = rec.get("cwd")
+                    if c:
+                        c = os.path.realpath(c)
+                        if c == root or c.startswith(prefix):
+                            return True
+        except OSError:
+            continue
+    return False
+
+
+def transcript_dirs(cwd):
+    """Every project dir whose sessions ran in this repo. Current cwd first.
+
+    One repo is routinely worked from several directories — the main checkout
+    plus any `git worktree` checkouts (Claude Code's own worktrees land under
+    `<repo>/.claude/worktrees/<name>`). Each directory gets its own dir under
+    `~/.claude/projects`, while every commit lands in one shared history.
+    Scoping transcripts to the current cwd alone therefore yields slices with a
+    diff and no session behind them — the one thing the bundle exists to carry.
+
+    Three sources, in order: the exact dir for `cwd`; the dir for each live
+    checkout; and — for worktrees since deleted, whose paths git no longer
+    reports — any remaining project dir whose records place their cwd inside
+    the repo. That last sweep is the only reason `_dir_cwd_under` exists.
+    """
+    found = []
+
+    def add(path):
+        if path and path not in found and os.path.isdir(path):
+            found.append(path)
+
+    add(transcript_dir(cwd))
+
+    checkouts = _checkout_paths(cwd)
+    for path in checkouts:
+        add(transcript_dir(path))
+
+    root = checkouts[0] if checkouts else None
+    if not root:
+        return found
+
+    base = _projects_base()
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return found
+    for name in names:
+        cand = os.path.join(base, name)
+        if cand in found or not os.path.isdir(cand):
+            continue
+        if _dir_cwd_under(cand, root):
+            found.append(cand)
+    return found
+
+
 def _transcript_files(cwd, cutoff):
     # A None cutoff means the window resolved to no commits (e.g. an empty git
     # range like `HEAD..HEAD`). Without a lower bound every session in the repo
@@ -476,13 +587,14 @@ def _transcript_files(cwd, cutoff):
     # cutoff" as "no transcripts".
     if cutoff is None:
         return []
-    d = transcript_dir(cwd)
-    if not d:
-        return []
     cut_ts = cutoff.timestamp()
     picked = []
-    try:
-        for name in os.listdir(d):
+    for d in transcript_dirs(cwd):
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for name in names:
             if not name.endswith(".jsonl"):
                 continue
             path = os.path.join(d, name)
@@ -492,8 +604,6 @@ def _transcript_files(cwd, cutoff):
                 continue
             if mtime >= cut_ts:
                 picked.append((mtime, path))
-    except OSError:
-        return []
     picked.sort()
     return [p for _, p in picked]
 
@@ -751,6 +861,15 @@ def build_per_commit_bundle(window, cwd):
     out.append("## Work slices\n")
     if not kept:
         out.append("(no commits with a story in this window)\n")
+        if not repo["has_uncommitted"]:
+            # No commits and a clean tree, but `meaningful` was true, so the
+            # window holds session activity and nothing else — reading, tracing,
+            # a decision that ended in no edit. Without this block those lines
+            # have no slice to land in and the bundle renders empty.
+            out.append("#### Session excerpts (no commit in this window)")
+            out.extend(_session_block(
+                session_lines_between(sessions, None, None)))
+            out.append("")
 
     # Every kept slice gets the same share of the budget, decided before any of
     # it is spent. `cap_diff` only ever elides hunk bodies, so narrowing an
@@ -760,7 +879,7 @@ def build_per_commit_bundle(window, cwd):
                     PER_COMMIT_TOTAL_CAP // max(1, len(kept))))
 
     prev_ts = None
-    for commit, diff in kept:
+    for index, (commit, diff) in enumerate(kept):
         c_files, c_ins, c_dels = commit_shortstat(cwd, commit["sha"])
         out.append("### Slice %s — %s" % (commit["short"], commit["subject"]))
         out.append("- committed: %s" % (st.iso(commit["ts"]) if commit["ts"] else "?"))
@@ -775,6 +894,20 @@ def build_per_commit_bundle(window, cwd):
         out.append("#### Session excerpts")
         out.extend(_session_block(
             session_lines_between(sessions, prev_ts, commit["ts"])))
+
+        # Session activity newer than the last commit belongs to no slice: the
+        # loop's upper bound is that commit, and the `working` slice that would
+        # own the remainder only exists when the tree is dirty. On a clean tree
+        # those lines were silently dropped — the "committed, then kept digging"
+        # case, and the run of `/post` itself. They are appended to the newest
+        # slice rather than given one of their own, because no diff stands
+        # behind them: they are evidence for this item, not a separate item.
+        if index == len(kept) - 1 and not repo["has_uncommitted"]:
+            tail = session_lines_between(sessions, commit["ts"], None)
+            if tail:
+                out.append("")
+                out.append("_after this commit:_")
+                out.extend(_session_block(tail))
         out.append("")
         prev_ts = commit["ts"] or prev_ts
 
