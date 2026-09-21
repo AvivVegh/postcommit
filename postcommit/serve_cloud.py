@@ -55,11 +55,39 @@ def _run(fn):
     return json.dumps({"ok": True, "result": result}, indent=2)
 
 
-def build_server():
-    """Construct the FastMCP server. Raises ImportError if the extra is absent."""
-    from mcp.server.fastmcp import FastMCP  # type: ignore
+def _server_class():
+    """The SDK's high-level server class, across both major MCP SDK versions.
 
-    server = FastMCP("postcommit-cloud")
+    mcp 2.x renamed `FastMCP` to `MCPServer` and removed the old import path.
+    Both names take the server name positionally, and `.tool()` / `.run()` are
+    identical on either, so one alias covers the whole of this module. The 2.x
+    path is tried first so a fresh install doesn't pay for a failed import.
+
+    Raises ImportError when the `[cloud]` extra isn't installed at all, which is
+    what `main` turns into the install hint.
+    """
+    try:
+        from mcp.server import MCPServer  # type: ignore
+        return MCPServer
+    except ImportError:
+        pass
+    try:
+        # 2.x also exposes it here, and this is the path the SDK's own
+        # migration guide prints — worth trying before falling back to v1.
+        from mcp.server.mcpserver import MCPServer  # type: ignore
+        return MCPServer
+    except ImportError:
+        pass
+    # v1. Under 2.x this module still exists but raises on import (with a
+    # migration hint), and ModuleNotFoundError is an ImportError — so reaching
+    # here under 2.x would already have been caught above.
+    from mcp.server.fastmcp import FastMCP  # type: ignore
+    return FastMCP
+
+
+def build_server():
+    """Construct the MCP server. Raises ImportError if the extra is absent."""
+    server = _server_class()("postcommit-cloud")
 
     @server.tool()
     def create_post(content: str, scheduled_at: Optional[str] = None) -> str:

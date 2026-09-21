@@ -204,6 +204,16 @@ interactive install QA in `docs/smoke-test.md`.
   `~/.postcommit/credentials.json`), and `cloud_login.py` is what populates that file —
   do not add throwaway auth scaffolding elsewhere. Anything writing credentials goes
   through `cloud_auth.write_credentials`, which is what applies the 0o600 chmod.
+- **`serve_cloud` spans both MCP SDK majors.** mcp 2.x renamed `FastMCP` to
+  `MCPServer` and deleted the v1 import path, so the hard-coded
+  `from mcp.server.fastmcp import FastMCP` broke the moment 2.x resolved in CI.
+  `serve_cloud._server_class()` picks the class at runtime — `mcp.server.MCPServer`,
+  then `mcp.server.mcpserver.MCPServer`, then v1's `FastMCP` — and `.tool()` /
+  `.run()` are identical on either, so nothing else in the module changes. The
+  `[cloud]` extra stays `mcp>=1.2` on purpose: pinning `<2` would hold new installs
+  on the old SDK, and raising the floor to `>=2` breaks anyone already on 1.x.
+  `ServerClassResolution` in `tests/test_serve_cloud.py` covers all three branches
+  with stub modules, since any given machine has only one SDK installed.
 - **Two networked commands, and only two.** `commands/login.md` (`/login`)
   carries *authentication only* — never repo content. `commands/sync.md` (`/sync`) is
   the only surface that sends *content*, and only draft posts the user has

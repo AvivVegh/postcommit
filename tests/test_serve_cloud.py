@@ -5,14 +5,19 @@ Two things worth testing without the network or the MCP SDK:
   1. main() graceful-degrades when the `[cloud]` extra (mcp) is absent — mirrors
      test_cli.py::Serve for the local server.
   2. build_server() registers all six thin tools (skipped when mcp isn't
-     installed, since FastMCP can't be constructed).
+     installed, since the server class can't be constructed).
 
 The `_run` helper's error-to-JSON mapping is covered directly — it needs no MCP.
+`_server_class`'s version resolution is covered with stub modules, so both SDK
+majors are exercised on a machine that only has one of them installed.
 """
 
 import io
 import json
+import sys
+import types
 import unittest
+import unittest.mock
 from contextlib import redirect_stderr
 
 from _support import state  # noqa: F401  (ensures repo root on sys.path)
@@ -39,10 +44,66 @@ class GracefulDegrade(unittest.TestCase):
         self.assertIn("postcommit[cloud]", err.getvalue())
 
 
+class ServerClassResolution(unittest.TestCase):
+    """`_server_class` spans both SDK majors.
+
+    mcp 2.x renamed `FastMCP` to `MCPServer` and removed the v1 import path, so
+    a single hard-coded import breaks on one major or the other. Stub modules
+    stand in for the SDK here: the installed version only ever exercises one of
+    these branches, and CI installs one version per job.
+    """
+
+    def _install(self, root_attr=None, mcpserver_attr=None, fastmcp_attr=None):
+        """Fake `mcp.server` (+ submodules) with only the given names present."""
+        mods = {"mcp": types.ModuleType("mcp"),
+                "mcp.server": types.ModuleType("mcp.server")}
+        if root_attr is not None:
+            mods["mcp.server"].MCPServer = root_attr
+        if mcpserver_attr is not None:
+            sub = types.ModuleType("mcp.server.mcpserver")
+            sub.MCPServer = mcpserver_attr
+            mods["mcp.server.mcpserver"] = sub
+        if fastmcp_attr is not None:
+            sub = types.ModuleType("mcp.server.fastmcp")
+            sub.FastMCP = fastmcp_attr
+            mods["mcp.server.fastmcp"] = sub
+        # patch.dict snapshots the whole of sys.modules and restores it on stop,
+        # so deleting entries inside the patch is safe.
+        patcher = unittest.mock.patch.dict(sys.modules, mods, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # A real SDK already imported by an earlier test leaves its submodules
+        # in sys.modules, and `from mcp.server.x import Y` resolves straight
+        # off that — which would satisfy a branch this case means to close.
+        for name in ("mcp.server.mcpserver", "mcp.server.fastmcp"):
+            if name not in mods:
+                sys.modules.pop(name, None)
+
+    def test_prefers_the_2x_class(self):
+        sentinel = object()
+        self._install(root_attr=sentinel, fastmcp_attr=object())
+        self.assertIs(sentinel, serve_cloud._server_class())
+
+    def test_falls_back_to_the_2x_submodule_path(self):
+        sentinel = object()
+        self._install(mcpserver_attr=sentinel, fastmcp_attr=object())
+        self.assertIs(sentinel, serve_cloud._server_class())
+
+    def test_falls_back_to_the_1x_class(self):
+        sentinel = object()
+        self._install(fastmcp_attr=sentinel)
+        self.assertIs(sentinel, serve_cloud._server_class())
+
+    def test_raises_import_error_when_the_extra_is_absent(self):
+        self._install()  # `mcp.server` present but empty — no server class
+        with self.assertRaises(ImportError):
+            serve_cloud._server_class()
+
+
 class ToolRegistration(unittest.TestCase):
     def setUp(self):
         if not _mcp_installed():
-            self.skipTest("mcp not installed; FastMCP cannot be constructed")
+            self.skipTest("mcp not installed; the server class can't be constructed")
 
     def test_build_server_registers_all_six_tools(self):
         import asyncio
