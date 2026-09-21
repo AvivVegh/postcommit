@@ -311,6 +311,37 @@ interactive install QA in `docs/smoke-test.md`.
   `postcommit.extract.transcript_dir` computes that and also tries a `.`-folded variant
   (some Claude Code versions fold `.` to `-`), then filters records by `.timestamp`
   against the window cutoff.
+- **Transcripts are collected across every checkout of the repo, not just `cwd`.**
+  One repo is routinely worked from the main checkout *and* linked worktrees
+  (Claude Code's land under `<repo>/.claude/worktrees/<name>`); each gets its own
+  encoded project dir while every commit lands in one shared history. Scoping to
+  `cwd` alone is what produced slices holding a diff with no session behind it —
+  the bundle's whole reason to exist. `extract.transcript_dirs` unions three
+  sources: the exact dir for `cwd`, the dir for each path `git worktree list`
+  reports, and a sweep of the remaining project dirs for any whose records place
+  their `cwd` inside the repo (that last one recovers *deleted* worktrees, which
+  git no longer reports). **Never match those dir names by prefix** —
+  `.../repos/postcommit` is a prefix of `.../repos/postcommit-cloud`, so a name
+  match leaks a different repo's transcripts. Confirmation reads the recorded
+  `cwd` back, via `realpath` on both sides: git reports resolved paths while
+  Claude Code encodes the path it was handed, and on macOS those differ under
+  `/var` and `/tmp`.
+- **Session activity newer than the newest commit is appended to the newest
+  slice**, marked `_after this commit:_`. Each slice's bound is its own commit and
+  the `working` slice that would own the remainder exists only on a dirty tree, so
+  on a clean tree that tail — "committed, then kept digging", and the `/post` run
+  itself — used to be dropped silently. It attaches to that slice rather than
+  becoming its own item because no diff stands behind it: evidence, not a separate
+  piece of work. Same reason a window whose only content is session activity still
+  prints an excerpt block under `## Work slices`.
+- **A missing `session_id` is never recorded in the watermark.** `handle_session_end`
+  dedupes with a membership test against `processed_sessions`, so any stand-in value
+  is *sticky*: record `"unknown"` once and every later payload without an id matches
+  it, making SessionEnd return early forever — no scoring, no recommendation, no
+  nudge, permanently, in that repo. An unnamed session is processed and simply not
+  remembered (re-running it is harmless: scoring is pure and the rec is overwritten).
+  `state.read_watermark` also strips the legacy sentinels on read, which is the
+  migration — don't "clean up" that filter.
 - The window argument accepts durations (`1d`, `4h`, `30m`), `today`, git ranges
   (`HEAD~3..HEAD`, `main..HEAD`, `<sha>..<sha>`), and `since=YYYY-MM-DD`.
 - Branching/PR flow: trunk-based on `main`. Do work on a short-lived, conventionally

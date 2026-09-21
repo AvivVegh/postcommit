@@ -188,12 +188,22 @@ def default_watermark():
     }
 
 
+# Written by versions that collapsed a missing session_id to a stand-in. The
+# dedupe in handle_session_end is a membership test, so this value is sticky:
+# left in place it silences SessionEnd forever in that repo. Drop it on read —
+# a one-line migration, and cheaper than asking users to delete a state file.
+_POISON_SESSION_IDS = {"unknown", ""}
+
+
 def read_watermark(cwd):
     wm = default_watermark()
     wm.update(read_json(watermark_path(cwd), {}))
     # keep the processed-session list bounded; only recency matters
     if isinstance(wm.get("processed_sessions"), list):
-        wm["processed_sessions"] = wm["processed_sessions"][-200:]
+        wm["processed_sessions"] = [
+            sid for sid in wm["processed_sessions"][-200:]
+            if sid not in _POISON_SESSION_IDS
+        ]
     else:
         wm["processed_sessions"] = []
     return wm
