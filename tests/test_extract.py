@@ -619,6 +619,25 @@ class TrailingSessionActivity(_FakeProjectsBase):
         working = bundle.split("### Slice working", 1)[1]
         self.assertIn("still working", working)
 
+    def test_a_historical_range_gets_no_tail(self):
+        # The tail is open-ended on the right. When the newest slice is not
+        # HEAD, everything said between that commit and *now* would be swept
+        # into it — work that belongs to later commits, presented as evidence
+        # for this one. "Kept digging after committing" only means anything
+        # when there is no later commit the digging could belong to.
+        commit(self.repo, "a.txt", "one\n", "chore: init")
+        commit(self.repo, "b.txt", "two\n", "feat: add b")
+        mid = st.git(self.repo, "rev-parse", "HEAD")
+        commit(self.repo, "c.txt", "three\n", "feat: add c")
+        self._session("work that belongs to the commit after the range")
+
+        bundle = ex.build_per_commit_bundle("HEAD~2..%s" % mid, self.repo)
+        self.assertIn("feat: add b", bundle)
+        self.assertNotIn("feat: add c", bundle)
+        self.assertNotIn("_after this commit:_", bundle)
+        self.assertNotIn("work that belongs to the commit after the range",
+                         bundle)
+
     def test_a_window_with_only_session_activity_still_reports_it(self):
         # A release commit is filtered out, so no slice survives; with a clean
         # tree the session lines had nowhere to land and the bundle came back

@@ -879,6 +879,7 @@ def build_per_commit_bundle(window, cwd):
                     PER_COMMIT_TOTAL_CAP // max(1, len(kept))))
 
     prev_ts = None
+    head = st.git_head(cwd)
     for index, (commit, diff) in enumerate(kept):
         c_files, c_ins, c_dels = commit_shortstat(cwd, commit["sha"])
         out.append("### Slice %s — %s" % (commit["short"], commit["subject"]))
@@ -902,7 +903,15 @@ def build_per_commit_bundle(window, cwd):
         # case, and the run of `/post` itself. They are appended to the newest
         # slice rather than given one of their own, because no diff stands
         # behind them: they are evidence for this item, not a separate item.
-        if index == len(kept) - 1 and not repo["has_uncommitted"]:
+        #
+        # Only when that newest slice is HEAD, though. The tail is open-ended on
+        # the right, so for a historical range (`<old-sha>..<old-sha>`) it would
+        # sweep up every session from the range's last commit until *now* —
+        # weeks of unrelated work handed to the writer as evidence for this
+        # item. "Committed, then kept digging" only means anything when there is
+        # no later commit the digging could have belonged to.
+        if (index == len(kept) - 1 and not repo["has_uncommitted"]
+                and head and commit["sha"] == head):
             tail = session_lines_between(sessions, commit["ts"], None)
             if tail:
                 out.append("")
